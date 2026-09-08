@@ -1,15 +1,21 @@
 # Marketplace Keyword Explorer
 
 A common repository for marketplace keyword-opportunity tooling — not a
-Blinkit-only tool. It currently ships two tabs, and is meant to grow with
+Blinkit-only tool. It currently ships three tabs, and is meant to grow with
 more marketplaces/tabs over time without re-architecting:
 
-- **🔎 Kw Explorer** — Blinkit's own keyword recommendation export, cross-checked
-  against what you're already running on Blinkit.
+- **🔎 Blinkit Suggested Keywords** — Blinkit's own keyword recommendation
+  export (search volume, brand, category, keyword type), with multi-select
+  filters and clickable column sort.
 - **🅰 AZ Running Keywords** — a standalone view of which search terms are
   performing well on Amazon (ranked by search volume/day, with units sold
   and a conversion-vs-benchmark column). No Blinkit tie-in — it doesn't
   check what's running anywhere, it's just the Amazon signal on its own.
+- **🅱 BK Running Ads** — keywords actually running as Blinkit ads (from the
+  daily per-keyword ad-performance log), ranked by budget consumed/day, with
+  Direct Qty Sold/day, New Users/day and Direct RoAS, all as true daily
+  run-rates, plus a blended-RoAS benchmark and Qualified-only filter (same
+  pattern as AZ Running Keywords).
 
 One static `index.html`, React 18 + SheetJS + Babel loaded from CDN, all
 data fetched client-side from Google Sheets as CSV. No backend, no build
@@ -23,10 +29,10 @@ into its own file once there are enough tabs to warrant it).
 |---|---|
 | Reco keywords ("Search reco BK" tab) | `CONFIG.RECO_WORKBOOK_ID` + `CONFIG.RECO_TAB_GID` |
 | AZ snapshot ("AZ Search snapshot" tab) | `CONFIG.RECO_WORKBOOK_ID` + `CONFIG.AZ_SNAPSHOT_GID` |
-| Live Blinkit ad rows (for "Running on BK") | `CONFIG.LIVE_ADS_WORKBOOK_ID` / `LIVE_ADS_TAB_GID` — **not configured yet, see §3** |
+| BK ad-performance log ("This Month- Product Listing" tab) | `CONFIG.BK_ADS_WORKBOOK_ID` + `CONFIG.BK_ADS_TAB_GID` — a different workbook than the two above |
 | Category revenue ranking | `CONFIG.SALES_WORKBOOK_ID` / `SALES_TAB_GID` — **not configured yet, see §3** |
 
-All four constants live at the top of the `<script type="application/jsx-source" id="app-source">`
+All these constants live at the top of the `<script type="application/jsx-source" id="app-source">`
 block in `index.html`. That's the only place you should need to edit sheet
 IDs/gids.
 
@@ -47,35 +53,55 @@ npm run dev
 
 It's a static file — any static server works (`npx serve`, `python3 -m http.server`, etc).
 
-## 3. Two things Kw Explorer does NOT have yet (by design)
+## 3. One thing Blinkit Suggested Keywords does NOT have yet (by design)
 
-These apply to the **Kw Explorer** tab only — AZ Running Keywords has no
-Blinkit tie-in at all, by design, so neither of these affects it.
+Categories are currently ranked by search volume, not revenue — a
+reasonable proxy, just not revenue-true. The "which category earns the
+most revenue" signal comes from a Sales-import feed that wasn't handed
+over for this build.
 
-The "is this keyword already running on Blinkit" signal and the "which
-category earns the most revenue" signal both come from other feeds (the
-master ad-performance export and the Sales-import feed) that weren't
-handed over for this build.
+To fix: point `CONFIG.SALES_WORKBOOK_ID` / `SALES_TAB_GID` at a sheet with
+columns `Brand | Category | Units` (or similar — column matching is by
+header name, looking for anything containing "unit"). Parser is
+`parseSalesRows` / `buildCatRevMap`. Single-constant change, no other code
+changes needed, once you say which sheet/tab it lives in.
 
-Until you plug those in:
+## 4. BK Running Ads — column mapping and DRR logic
 
-- **Every keyword shows as "Not running"** — there's a banner in the UI
-  reminding you of this. To fix: point `CONFIG.LIVE_ADS_WORKBOOK_ID` /
-  `LIVE_ADS_TAB_GID` at a sheet with columns `Brand | Keyword | Type | Spend
-  | Impressions | Date` (one row per ad per day; `Type` should say `Search`
-  for search campaigns). The app already has the parser/filter written
-  (`parseLiveAdsRows` / `buildLiveKwSet` in index.html) — last 14 days,
-  `spend > 0 || impressions > 0`, `Type === 'Search'`.
-- **Categories are ranked by search volume, not revenue** — a reasonable
-  proxy, just not revenue-true. To fix: point `CONFIG.SALES_WORKBOOK_ID` /
-  `SALES_TAB_GID` at a sheet with columns `Brand | Category | Units` (or
-  similar — column matching is by header name, looking for anything
-  containing "unit"). Parser is `parseSalesRows` / `buildCatRevMap`.
+Source: the **"This Month- Product Listing"** tab — one row per keyword ×
+campaign × day. Column matching is by header name first, falling back to
+these exact column letters if header names don't resolve:
 
-Both are single-constant changes, no other code changes needed, once you
-say which sheet/tab those live in.
+| What | Column | Header |
+|---|---|---|
+| Keyword | E | `Keyword` |
+| New Users | N | `New Users` |
+| Direct Sales | O | `Direct Sales` |
+| Direct Quantities Sold | Q | `Direct Quantities Sold` |
+| Estimated Budget Consumed | S | `Estimated Budget Consumed` |
+| Type | AA | `Type` (`Comp`/`Generic`/`Brand` — normalized to `Competition`/`Generic`/`Branded` to match the AZ tab's badge styling) |
+| Brand | AB | `Brand` |
+| Category | AC | `GC category` |
+| Comp Brand | AD | `Comp brand Name` |
 
-## 4. Deploy
+For each brand × keyword: every row from the last 30 days of data present
+(relative to the latest date in the sheet, not today's real date) is summed,
+then divided by however many distinct days actually show up in that
+30-day window — so a tracker with gaps still gives a true daily run-rate,
+not an average diluted by missing days. Direct RoAS = Direct Sales ÷
+Estimated Budget Consumed over that same summed window (the ratio is the
+same whether you use the daily or the summed totals). Benchmark RoAS is
+the blended Direct RoAS (sum of Direct Sales ÷ sum of Estimated Budget
+Consumed) for every keyword sharing that brand × type — same shape as AZ
+Running Keywords' conversion benchmark, just RoAS instead of conversion.
+
+This feed is heavier than the other two — the source tab accumulates one
+row per keyword per campaign per day, so a few months of history can mean
+tens of thousands of rows even though it aggregates down to a couple
+thousand keywords. If load times become noticeable, trimming the sheet to
+a rolling ~60–90 day window is the fix, not code changes.
+
+## 5. Deploy
 
 ### GitHub
 
@@ -97,12 +123,13 @@ git push -u origin main
 
 Every push to `main` auto-redeploys.
 
-## 5. Sharing / access requirements
+## 6. Sharing / access requirements
 
-- Both source workbooks must stay **"Anyone with the link"** (viewer is
-  enough) — the fetches are unauthenticated and cross-origin. This is a UI
-  convenience app, not a security boundary: anyone with the deployed URL can
-  see the same data anyone with the sheet link can see. If that's a
+- All source workbooks (including the BK ads-tracker workbook, which is
+  separate from the other two) must stay **"Anyone with the link"** (viewer
+  is enough) — the fetches are unauthenticated and cross-origin. This is a
+  UI convenience app, not a security boundary: anyone with the deployed URL
+  can see the same data anyone with the sheet link can see. If that's a
   concern, put the Vercel deployment behind Vercel's password/SSO
   protection (Project Settings → Deployment Protection) rather than trying
   to lock down the sheets.
@@ -112,7 +139,7 @@ Every push to `main` auto-redeploys.
   reliably by gid regardless of publish state — keep using gid, not sheet
   name, if you add more tabs.
 
-## 6. Data refresh / caching
+## 7. Data refresh / caching
 
 - Sheet CSVs are cached client-side in IndexedDB (`marketplace_kwexpl_cache`)
   for **4 hours** (`CONFIG.CACHE_TTL_MS`). Users can force a refresh with the
@@ -120,25 +147,24 @@ Every push to `main` auto-redeploys.
 - Bump `CONFIG.CACHE_VER` (e.g. `v1` → `v2`) any time you change a sheet's
   columns — that invalidates every user's cache immediately instead of
   waiting out the TTL.
-- Ignore/snooze state (the "⏸ 2wk" / "🚫 Forever" buttons on **Kw Explorer
-  only** — AZ Running Keywords has no ignore feature) is **per-browser**,
-  stored in `localStorage` under `kwexpl_ignore` — it does not sync across
-  devices or teammates.
 
-## 7. Adding another marketplace tab later
+## 8. Adding another marketplace tab later
 
 The pattern to copy: a `CONFIG` block for the new sheet, a `parseX` +
 `aggregateX` function pair, a `<XTab>` component, and one more entry in the
 `tabs` switcher in `<App>`. Nothing else in the file needs to change —
-`fetchSheetCSV` and the IndexedDB cache are already generic. If your new
-tab needs an ignore/snooze feature, namespace its keys with a prefix (see
-`ignoreKey`'s optional `ns` argument) so they don't collide with Kw
-Explorer's.
+`fetchSheetCSV` and the IndexedDB cache are already generic. Blinkit
+Suggested Keywords uses the `<MultiSelect>` component for its filters;
+AZ Running Keywords and BK Running Ads use single-select dropdowns plus
+the same Qualified-only/benchmark pattern (`computeXBenchmarks`,
+`qualifiedOnly`/floor inputs) and the same click-to-sort `<th>` pattern
+(`sortKey`/`sortDir`/`handleSort`) — reuse whichever fits the new tab
+rather than building new ones.
 
-## 8. File map
+## 9. File map
 
 ```
-index.html                          the whole app (config, data layer, both tabs)
+index.html                          the whole app (config, data layer, all three tabs)
 google-apps-script/buildAZSnapshot.gs   Apps Script that builds the AZ snapshot tab
 package.json                         `npm run dev` for local preview
 vercel.json                          static-site config for Vercel

@@ -145,6 +145,11 @@ const CONFIG = {
   RECO_TAB_GID: '244896497',      // "Search reco BK"
   AZ_SNAPSHOT_GID: '1975500102',  // "AZ Search snapshot" (built by the Apps Script — see /google-apps-script)
 
+  // "This Month- Product Listing" tab — the daily per-keyword ad-performance
+  // log that BK Running Ads is built from (a different workbook than the two above).
+  BK_ADS_WORKBOOK_ID: '1enTpKSWbTqSEEZDo4WRsFj9HwlDjgbpVfUyW5icPGuM',
+  BK_ADS_TAB_GID: '1816954201',
+
   // OPTIONAL — plug in your Sales-import feed (brand, category, units sold)
   // to rank a keyword's categories by revenue for the "primary category"
   // column. Leave WORKBOOK_ID blank to rank categories by search volume
@@ -155,6 +160,7 @@ const CONFIG = {
 
 const LOOKBACK_DAYS_RECO = 14;
 const LOOKBACK_WEEKS_AZ = 4; // informational only; the Apps Script already trims to 4 weeks
+const LOOKBACK_DAYS_BK = 30; // window size for BK Running Ads; the actual DRR divisor is however many distinct days of data fall inside it, not a hardcoded 30
 
 // ---------------------------------------------------------------------------
 // IndexedDB cache
@@ -481,6 +487,127 @@ function computeBenchmarks(rows) {
   const bench = {};
   Object.keys(agg).forEach(k => { bench[k] = agg[k].vol > 0 ? agg[k].units / agg[k].vol : 0; });
   return bench; // conversion ratio (0-1) per brand||type
+}
+
+// ---------------------------------------------------------------------------
+// BK Running Ads (daily per-keyword ad-performance log) — parse + aggregate
+// Source: "This Month- Product Listing" — one row per keyword × campaign ×
+// day. Column letters below are exactly what the sheet uses (see README).
+// ---------------------------------------------------------------------------
+const BK_KTYPE_MAP = { comp: 'Competition', competition: 'Competition', brand: 'Branded', branded: 'Branded', generic: 'Generic' };
+
+function parseBkAdsRows(text) {
+  const rows = parseCSV(text);
+  if (!rows.length) return [];
+  const headerIdx = findHeaderRow(rows, ['keyword']);
+  const header = rows[headerIdx].map(normHeader);
+  const col = (test) => { for (let c = 0; c < header.length; c++) if (test(header[c])) return c; return -1; };
+  const ci = {
+    date: col(h => h.indexOf('date') >= 0),
+    keyword: col(h => h === 'keyword'),
+    newUsers: col(h => h === 'new users'),
+    directSales: col(h => h === 'direct sales'),
+    directQty: col(h => h === 'direct quantities sold'),
+    estBudget: col(h => h === 'estimated budget consumed'),
+    ktype: col(h => h === 'type'),
+    brand: col(h => h === 'brand'),
+    category: col(h => h.indexOf('category') >= 0),
+    compBrand: col(h => h.indexOf('comp brand') >= 0),
+  };
+  // Fallback to the documented column-letter order if header names didn't resolve
+  // (E, N, O, Q, S, AA, AB, AC, AD — 0-indexed below).
+  const FIXED = { keyword: 4, newUsers: 13, directSales: 14, directQty: 16, estBudget: 18, ktype: 26, brand: 27, category: 28, compBrand: 29 };
+  Object.keys(FIXED).forEach(k => { if (ci[k] < 0) ci[k] = FIXED[k]; });
+
+  const out = [];
+  for (let r = headerIdx + 1; r < rows.length; r++) {
+    const row = rows[r];
+    const keyword = String(row[ci.keyword] || '').trim();
+    const brand = String(row[ci.brand] || '').trim();
+    if (!keyword || !brand) continue;
+    const ktypeRaw = String(row[ci.ktype] || '').trim();
+    const ktype = BK_KTYPE_MAP[ktypeRaw.toLowerCase()] || ktypeRaw || 'Generic';
+    out.push({
+      brand,
+      keyword,
+      ktype,
+      category: String(row[ci.category] || '').trim(),
+      compBrand: String(row[ci.compBrand] || '').trim(),
+      date: parseDate(row[ci.date]),
+      newUsers: toNumber(row[ci.newUsers]),
+      directSales: toNumber(row[ci.directSales]),
+      directQty: toNumber(row[ci.directQty]),
+      estBudget: toNumber(row[ci.estBudget]),
+    });
+  }
+  return out;
+}
+
+// Sums every row into one line per brand×keyword over the last
+// LOOKBACK_DAYS_BK days of data present, then divides by however many
+// distinct days actually showed up in that window — so DRR stays accurate
+// even if the tracker has gaps and doesn't have a full 30 days for everyone.
+function aggregateBkAds(list) {
+  if (!list.length) return [];
+  let maxDate = null;
+  list.forEach(r => { if (r.date && (!maxDate || r.date > maxDate)) maxDate = r.date; });
+  const cutoff = maxDate ? new Date(maxDate.getTime() - (LOOKBACK_DAYS_BK - 1) * 86400000) : null;
+  const windowed = list.filter(r => !cutoff || !r.date || (r.date >= cutoff && r.date <= maxDate));
+
+  const dayKeys = new Set();
+  windowed.forEach(r => { if (r.date) dayKeys.add(r.date.getTime()); });
+  const daysPresent = dayKeys.size || 1;
+
+  const groups = {};
+  windowed.forEach(r => {
+    const key = `${r.brand}||${r.keyword}`;
+    if (!groups[key]) {
+      groups[key] = { brand: r.brand, keyword: r.keyword, ktype: r.ktype, category: r.category, compBrand: r.compBrand,
+        newUsers: 0, directSales: 0, directQty: 0, estBudget: 0, lastDate: null };
+    }
+    const g = groups[key];
+    g.newUsers += r.newUsers;
+    g.directSales += r.directSales;
+    g.directQty += r.directQty;
+    g.estBudget += r.estBudget;
+    // Type/Category/Comp-brand can in theory drift for the same keyword over
+    // time (recategorization) — keep whichever row was seen most recently.
+    if (!g.lastDate || (r.date && r.date >= g.lastDate)) {
+      if (r.ktype) g.ktype = r.ktype;
+      if (r.category) g.category = r.category;
+      if (r.compBrand) g.compBrand = r.compBrand;
+      g.lastDate = r.date;
+    }
+  });
+
+  const out = Object.values(groups).map(g => ({
+    brand: g.brand,
+    keyword: g.keyword,
+    ktype: g.ktype || 'Generic',
+    category: g.category,
+    compBrand: g.compBrand,
+    newUsersDay: g.newUsers / daysPresent,
+    directQtyDay: g.directQty / daysPresent,
+    budgetDay: g.estBudget / daysPresent,
+    directSales: g.directSales, // kept as totals for RoAS + benchmark math (ratio is unaffected by the /daysPresent scaling)
+    estBudget: g.estBudget,
+    roas: g.estBudget > 0 ? g.directSales / g.estBudget : 0,
+  }));
+  out.sort((a, b) => b.budgetDay - a.budgetDay); // ranked by daily budget consumed, highest first
+  return out;
+}
+
+function computeBkBenchmarks(rows) {
+  const agg = {}; // brand||type -> {budget, sales}
+  rows.forEach(r => {
+    const key = `${r.brand}||${r.ktype}`;
+    if (!agg[key]) agg[key] = { budget: 0, sales: 0 };
+    agg[key].budget += r.estBudget;
+    agg[key].sales += r.directSales;
+  });
+  const bench = {};
+  Object.keys(agg).forEach(k => { bench[k] = agg[k].budget > 0 ? agg[k].sales / agg[k].budget : 0; });
+  return bench; // blended Direct RoAS per brand||type
 }
 
 // ---------------------------------------------------------------------------
@@ -923,6 +1050,164 @@ function AzGapsTab({ azRows }) {
 }
 
 // ===========================================================================
+// Tab 3: BK Running Ads (Blinkit's own keyword ad-performance log)
+// ===========================================================================
+function BkAdsTab({ bkRows }) {
+  const [q, setQ] = React.useState('');
+  const qd = useDebounced(q, 200);
+  const [brand, setBrand] = React.useState('All');
+  const [category, setCategory] = React.useState('All');
+  const [ktype, setKtype] = React.useState('All');
+  const [qualifiedOnly, setQualifiedOnly] = React.useState(false);
+  const [budgetFloor, setBudgetFloor] = React.useState(50);
+  const [roasPct, setRoasPct] = React.useState(50);
+  const [sortKey, setSortKey] = React.useState('budgetDay');
+  const [sortDir, setSortDir] = React.useState('desc');
+
+  const SORT_IS_NUM = { keyword: false, ktype: false, brand: false, category: false, compBrand: false, budgetDay: true, directQtyDay: true, newUsersDay: true, roas: true, bench: true };
+  const handleSort = (key) => {
+    if (key === sortKey) { setSortDir(d => (d === 'asc' ? 'desc' : 'asc')); return; }
+    setSortKey(key);
+    setSortDir(SORT_IS_NUM[key] ? 'desc' : 'asc');
+  };
+  const sortArrow = (key) => (key === sortKey ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
+
+  // aggregateBkAds/fetch/parse never see qualifiedOnly, budgetFloor or roasPct —
+  // these are pure display-layer filters computed below; they cannot change
+  // what was fetched from the sheet or what's sitting in the IndexedDB cache.
+  const aggregated = React.useMemo(() => aggregateBkAds(bkRows), [bkRows]);
+  const benchmarks = React.useMemo(() => computeBkBenchmarks(aggregated), [aggregated]);
+
+  const rows = React.useMemo(() => aggregated.map(r => {
+    const bench = benchmarks[`${r.brand}||${r.ktype}`] || 0;
+    const floor = bench * (roasPct / 100);
+    const qualifies = r.budgetDay >= budgetFloor && r.roas >= floor;
+    return { ...r, bench, floor, qualifies };
+  }), [aggregated, benchmarks, budgetFloor, roasPct]);
+
+  const brands = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.brand))).sort()], [rows]);
+  const categories = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.category))).filter(Boolean).sort()], [rows]);
+  const ktypes = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.ktype))).sort()], [rows]);
+
+  const filtered = rows.filter(r => {
+    if (brand !== 'All' && r.brand !== brand) return false;
+    if (category !== 'All' && r.category !== category) return false;
+    if (ktype !== 'All' && r.ktype !== ktype) return false;
+    if (qualifiedOnly && !r.qualifies) return false;
+    if (qd && r.keyword.toLowerCase().indexOf(qd.toLowerCase()) < 0) return false;
+    return true;
+  });
+
+  const sorted = React.useMemo(() => {
+    const arr = filtered.slice();
+    const dir = sortDir === 'asc' ? 1 : -1;
+    arr.sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      if (SORT_IS_NUM[sortKey]) return (av - bv) * dir;
+      const as = String(av || '').toLowerCase(), bs = String(bv || '').toLowerCase();
+      return as < bs ? -1 * dir : as > bs ? 1 * dir : 0;
+    });
+    return arr;
+  }, [filtered, sortKey, sortDir]);
+
+  // Virtualize — BK Running Ads can run to ~2,000 keywords today and only grows
+  // as more months of data accumulate in the source sheet.
+  const scrollRef = React.useRef(null);
+  const { startIndex, endIndex } = useVirtualRows(scrollRef, sorted.length);
+  const visibleRows = sorted.slice(startIndex, endIndex);
+  const topPad = startIndex * VROW_HEIGHT;
+  const bottomPad = (sorted.length - endIndex) * VROW_HEIGHT;
+
+  const benchCaption = React.useMemo(() => {
+    return Object.keys(benchmarks).sort().map(k => {
+      const [b, t] = k.split('||');
+      return `${b}·${t} ${benchmarks[k].toFixed(2)}x`;
+    }).join('  ·  ');
+  }, [benchmarks]);
+
+  return (
+    <div>
+      <div className="filters">
+        <input type="text" placeholder="Search keyword…" value={q} onChange={e => setQ(e.target.value)} />
+        <select value={brand} onChange={e => setBrand(e.target.value)}>
+          {brands.map(b => <option key={b} value={b}>{b === 'All' ? 'All brands' : b}</option>)}
+        </select>
+        <select value={category} onChange={e => setCategory(e.target.value)}>
+          {categories.map(c => <option key={c} value={c}>{c === 'All' ? 'All categories' : c}</option>)}
+        </select>
+        <select value={ktype} onChange={e => setKtype(e.target.value)}>
+          {ktypes.map(t => <option key={t} value={t}>{t === 'All' ? 'All types' : t}</option>)}
+        </select>
+        <label className="chk"><input type="checkbox" checked={qualifiedOnly} onChange={e => setQualifiedOnly(e.target.checked)} /> ✅ Qualified only</label>
+        <div className="num-inline">Budget floor/day ≥ ₹<input type="number" value={budgetFloor} onChange={e => setBudgetFloor(Number(e.target.value) || 0)} /></div>
+        <div className="num-inline">RoAS ≥ <input type="number" value={roasPct} onChange={e => setRoasPct(Number(e.target.value) || 0)} />% of benchmark</div>
+        {benchCaption && <div className="caption">Blended Direct RoAS by brand·type (used as the benchmark column): {benchCaption}</div>}
+      </div>
+
+      <div className="toolbar-row">
+        <button className="export-btn" onClick={() => exportToExcel(sorted, [
+          { label: 'Keyword', get: r => r.keyword },
+          { label: 'Type', get: r => r.ktype },
+          { label: 'Brand', get: r => r.brand },
+          { label: 'Category', get: r => r.category },
+          { label: 'Comp Brand', get: r => r.compBrand },
+          { label: 'Budget Consumed/day', get: r => Number(r.budgetDay.toFixed(1)) },
+          { label: 'Direct Qty Sold/day', get: r => Number(r.directQtyDay.toFixed(2)) },
+          { label: 'New Users/day', get: r => Number(r.newUsersDay.toFixed(2)) },
+          { label: 'Direct RoAS', get: r => Number(r.roas.toFixed(2)) },
+          { label: 'Benchmark RoAS', get: r => Number(r.bench.toFixed(2)) },
+        ], 'bk_running_ads_export.xlsx')}>⬇ Excel</button>
+      </div>
+
+      <div className="table-wrap" ref={scrollRef}>
+        <table className="data virtual">
+          <thead>
+            <tr>
+              <th className="kw-col sortable" onClick={() => handleSort('keyword')}>Keyword{sortArrow('keyword')}</th>
+              <th className="sortable" onClick={() => handleSort('ktype')}>Type{sortArrow('ktype')}</th>
+              <th className="sortable" onClick={() => handleSort('brand')}>Brand{sortArrow('brand')}</th>
+              <th className="sortable" onClick={() => handleSort('category')}>Category{sortArrow('category')}</th>
+              <th className="sortable" onClick={() => handleSort('compBrand')}>Comp Brand{sortArrow('compBrand')}</th>
+              <th className="num sortable" onClick={() => handleSort('budgetDay')}>Budget Consumed/day{sortArrow('budgetDay')}</th>
+              <th className="num sortable" onClick={() => handleSort('directQtyDay')}>Direct Qty Sold/day{sortArrow('directQtyDay')}</th>
+              <th className="num sortable" onClick={() => handleSort('newUsersDay')}>New Users/day{sortArrow('newUsersDay')}</th>
+              <th className="num sortable" onClick={() => handleSort('roas')}>Direct RoAS{sortArrow('roas')}</th>
+              <th className="num sortable" onClick={() => handleSort('bench')}>Benchmark RoAS{sortArrow('bench')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length === 0 && (
+              <tr><td colSpan="10"><div className="empty-state">No keywords match these filters.</div></td></tr>
+            )}
+            {topPad > 0 && (
+              <tr aria-hidden="true" style={{ height: topPad }}><td colSpan="10" style={{ padding: 0, border: 'none' }} /></tr>
+            )}
+            {visibleRows.map(r => (
+              <tr key={r.brand + '||' + r.keyword}>
+                <td className="kw-cell">{r.keyword}</td>
+                <td><TypeBadge type={r.ktype} /></td>
+                <td>{r.brand}</td>
+                <td>{r.category || '—'}</td>
+                <td>{r.compBrand || '—'}</td>
+                <td className="num">₹{fmt1dp(r.budgetDay)}</td>
+                <td className="num">{fmt1dp(r.directQtyDay)}</td>
+                <td className="num">{fmt1dp(r.newUsersDay)}</td>
+                <td className="num">{r.roas.toFixed(2)}x</td>
+                <td className="num">{r.bench.toFixed(2)}x</td>
+              </tr>
+            ))}
+            {bottomPad > 0 && (
+              <tr aria-hidden="true" style={{ height: bottomPad }}><td colSpan="10" style={{ padding: 0, border: 'none' }} /></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="footnote">Click a column header to sort (click again to flip direction) — default is Budget Consumed/day, high to low. Showing {fmtInt(sorted.length)} keywords. All /day figures are the last {LOOKBACK_DAYS_BK}-day window's totals divided by however many distinct days of data actually exist in that window (so it stays a true daily run-rate even if the tracker has gaps). Direct RoAS = Direct Sales ÷ Estimated Budget Consumed over that same window. Benchmark RoAS is the blended Direct RoAS for that keyword's brand × type — Direct RoAS is compared against it (as a % of benchmark) by the Qualified-only filter above.</div>
+    </div>
+  );
+}
+
+// ===========================================================================
 // App shell
 // ===========================================================================
 function App() {
@@ -931,6 +1216,7 @@ function App() {
   const [error, setError] = React.useState(null);
   const [recoText, setRecoText] = React.useState('');
   const [azText, setAzText] = React.useState('');
+  const [bkAdsText, setBkAdsText] = React.useState('');
   const [salesText, setSalesText] = React.useState('');
   const [lastLoaded, setLastLoaded] = React.useState(null);
   const [refreshTick, setRefreshTick] = React.useState(0);
@@ -950,13 +1236,15 @@ function App() {
         const jobs = [
           fetchSheetCSV(CONFIG.RECO_WORKBOOK_ID, CONFIG.RECO_TAB_GID, 'reco_bk', force),
           fetchSheetCSV(CONFIG.RECO_WORKBOOK_ID, CONFIG.AZ_SNAPSHOT_GID, 'az_snap', force),
+          fetchSheetCSV(CONFIG.BK_ADS_WORKBOOK_ID, CONFIG.BK_ADS_TAB_GID, 'bk_ads', force),
         ];
         if (salesConfigured) jobs.push(fetchSheetCSV(CONFIG.SALES_WORKBOOK_ID, CONFIG.SALES_TAB_GID, 'sales_import', force));
         const results = await Promise.all(jobs);
         if (cancelled) return;
         setRecoText(results[0].text || '');
         setAzText(results[1].text || '');
-        if (salesConfigured) setSalesText(results[2].text || '');
+        setBkAdsText(results[2].text || '');
+        if (salesConfigured) setSalesText(results[3].text || '');
         setLastLoaded(new Date());
       } catch (err) {
         if (!cancelled) setError(err.message || String(err));
@@ -970,6 +1258,7 @@ function App() {
 
   const recoRows = React.useMemo(() => recoText ? parseRecoKeywords(recoText) : [], [recoText]);
   const azRows = React.useMemo(() => azText ? parseAmazonSnapshot(azText) : [], [azText]);
+  const bkRows = React.useMemo(() => bkAdsText ? parseBkAdsRows(bkAdsText) : [], [bkAdsText]);
   const salesRows = React.useMemo(() => salesText ? parseSalesRows(salesText) : [], [salesText]);
   const catRevMap = React.useMemo(() => buildCatRevMap(salesRows), [salesRows]);
   const catRevFn = React.useCallback((brand, category) => {
@@ -995,6 +1284,7 @@ function App() {
       <div className="tabs">
         <button className={`tab-btn ${tab === 'kw' ? 'active' : ''}`} onClick={() => setTab('kw')}>🔎 Blinkit Suggested Keywords</button>
         <button className={`tab-btn ${tab === 'az' ? 'active' : ''}`} onClick={() => setTab('az')}>🅰 AZ Running Keywords</button>
+        <button className={`tab-btn ${tab === 'bk' ? 'active' : ''}`} onClick={() => setTab('bk')}>🅱 BK Running Ads</button>
       </div>
 
       {error && <div className="banner error">Couldn't load sheet data: {error}. Check that the workbook is link-shared and the gid is correct.</div>}
@@ -1003,7 +1293,9 @@ function App() {
       {!loading || lastLoaded ? (
         tab === 'kw'
           ? <KwExplorerTab recoRows={recoRows} catRevFn={catRevFn} salesConfigured={salesConfigured} />
-          : <AzGapsTab azRows={azRows} />
+          : tab === 'az'
+            ? <AzGapsTab azRows={azRows} />
+            : <BkAdsTab bkRows={bkRows} />
       ) : null}
     </div>
   );
