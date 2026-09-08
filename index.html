@@ -113,10 +113,11 @@
 
 <script type="application/jsx-source" id="app-source">
 /* ============================================================================
- * Marketplace Keyword Explorer — Kw Explorer + AZ->BK Gaps
- * A common repository for marketplace keyword-opportunity tooling. This
- * build's two tabs source Blinkit's own reco export and an Amazon->Blinkit
- * comparison; more marketplaces/tabs can be added under this same app.
+ * Marketplace Keyword Explorer — Kw Explorer + AZ Running Keywords
+ * A common repository for marketplace keyword-opportunity tooling. Kw
+ * Explorer sources Blinkit's own reco export; AZ Running Keywords is a
+ * standalone Amazon keyword-performance view (no Blinkit tie-in). More
+ * marketplaces/tabs can be added under this same app.
  * Single-file React app. Data source: Google Sheets (client-side CSV fetch,
  * no backend). See README.md for setup + deployment.
  * ==========================================================================*/
@@ -487,7 +488,7 @@ function buildCatRevMap(rows) {
 }
 
 // ---------------------------------------------------------------------------
-// AZ->BK Gaps (Amazon snapshot) — parse + aggregate
+// AZ Running Keywords (Amazon snapshot) — parse + aggregate
 // ---------------------------------------------------------------------------
 function parseAmazonSnapshot(text) {
   const rows = parseCSV(text);
@@ -531,10 +532,10 @@ function aggregateAmazon(list) {
   const groups = {};
   list.forEach(r => {
     const key = `${r.brand}||${r.keyword}`;
-    if (!groups[key] || r.unitsDay > groups[key].unitsDay) groups[key] = r;
+    if (!groups[key] || r.volDay > groups[key].volDay) groups[key] = r;
   });
   const out = Object.values(groups);
-  out.sort((a, b) => b.unitsDay - a.unitsDay);
+  out.sort((a, b) => b.volDay - a.volDay); // ranked by search volume/day
   return out;
 }
 
@@ -773,43 +774,34 @@ function KwExplorerTab({ recoRows, catRevFn, liveKwSet, liveConfigured, salesCon
 }
 
 // ===========================================================================
-// Tab 2: AZ -> BK Gaps
+// Tab 2: AZ Running Keywords (Amazon keyword performance — no Blinkit tie-in)
 // ===========================================================================
-function AzGapsTab({ azRows, liveKwSet, liveConfigured }) {
-  const [ignoreMap, setIgnore] = useIgnoreMap();
+function AzGapsTab({ azRows }) {
   const [q, setQ] = React.useState('');
   const qd = useDebounced(q, 200);
   const [brand, setBrand] = React.useState('All');
   const [ktype, setKtype] = React.useState('All');
-  const [status, setStatus] = React.useState('untapped');
-  const [showIgnored, setShowIgnored] = React.useState(false);
   const [qualifiedOnly, setQualifiedOnly] = React.useState(true);
   const [volFloor, setVolFloor] = React.useState(100);
   const [convPct, setConvPct] = React.useState(50);
 
+  // aggregateAmazon/fetch/parse never see qualifiedOnly, volFloor or convPct —
+  // these are pure display-layer filters computed below; they cannot change
+  // what was fetched from the sheet or what's sitting in the IndexedDB cache.
   const aggregated = React.useMemo(() => aggregateAmazon(azRows), [azRows]);
   const benchmarks = React.useMemo(() => computeBenchmarks(azRows), [azRows]);
 
   const rows = React.useMemo(() => aggregated.map(r => {
-    const key = ignoreKey(r.brand, r.keyword, 'az');
-    const ignoreVal = ignoreMap[key];
-    const ignored = ignoreVal === 'forever' || (typeof ignoreVal === 'number' && ignoreVal > Date.now());
-    const running = liveKwSet.has(`${r.brand.toLowerCase()}||${r.keyword.toLowerCase()}`);
-    const statusLabel = ignored ? 'Ignored' : running ? 'Running' : 'Not running';
     const bench = benchmarks[`${r.brand}||${r.ktype}`] || 0;
     const floor = bench * (convPct / 100);
     const qualifies = r.volDay >= volFloor && r.conv >= floor;
-    return { ...r, ignored, running, statusLabel, ignoreKeyVal: key, bench, floor, qualifies };
-  }), [aggregated, ignoreMap, liveKwSet, benchmarks, volFloor, convPct]);
+    return { ...r, bench, floor, qualifies };
+  }), [aggregated, benchmarks, volFloor, convPct]);
 
   const brands = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.brand))).sort()], [rows]);
   const ktypes = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.ktype))).sort()], [rows]);
 
   const filtered = rows.filter(r => {
-    if (!showIgnored && r.ignored) return false;
-    if (showIgnored && !r.ignored) return false;
-    if (status === 'untapped' && r.running) return false;
-    if (status === 'running' && !r.running) return false;
     if (brand !== 'All' && r.brand !== brand) return false;
     if (ktype !== 'All' && r.ktype !== ktype) return false;
     if (qualifiedOnly && !r.qualifies) return false;
@@ -817,16 +809,23 @@ function AzGapsTab({ azRows, liveKwSet, liveConfigured }) {
     return true;
   });
 
-  const kpis = React.useMemo(() => {
-    const untapped = rows.filter(r => !r.running && !r.ignored && (!qualifiedOnly || r.qualifies));
-    const base = rows.filter(r => !qualifiedOnly || r.qualifies);
-    return {
-      total: base.length,
-      untapped: untapped.length,
-      untappedUnits: untapped.reduce((s, r) => s + r.unitsDay, 0),
-      running: base.filter(r => r.running).length,
-    };
-  }, [rows, qualifiedOnly]);
+  // Brand-wise summary of what's currently in view (updates as filters change).
+  const brandSummary = React.useMemo(() => {
+    const map = {};
+    filtered.forEach(r => {
+      if (!map[r.brand]) map[r.brand] = { brand: r.brand, keywords: 0, units: 0, vol: 0 };
+      map[r.brand].keywords += 1;
+      map[r.brand].units += r.unitsDay;
+      map[r.brand].vol += r.volDay;
+    });
+    const list = Object.values(map).sort((a, b) => b.vol - a.vol);
+    const total = list.reduce((acc, r) => ({
+      keywords: acc.keywords + r.keywords,
+      units: acc.units + r.units,
+      vol: acc.vol + r.vol,
+    }), { keywords: 0, units: 0, vol: 0 });
+    return { list, total };
+  }, [filtered]);
 
   const benchCaption = React.useMemo(() => {
     return Object.keys(benchmarks).sort().map(k => {
@@ -837,19 +836,36 @@ function AzGapsTab({ azRows, liveKwSet, liveConfigured }) {
 
   return (
     <div>
-      {!liveConfigured && (
-        <div className="banner warn">
-          "Running on BK" isn't wired to a live ad-performance feed yet, so every keyword below shows
-          as <b>Not running</b>. Set <code>CONFIG.LIVE_ADS_WORKBOOK_ID</code> / <code>LIVE_ADS_TAB_GID</code> in
-          index.html to enable real status (see README).
-        </div>
-      )}
-
-      <div className="kpi-row">
-        <Kpi label="AZ search terms" value={fmtInt(kpis.total)} />
-        <Kpi label="Untapped (no BK ads)" value={fmtInt(kpis.untapped)} />
-        <Kpi label="Untapped units/day" value={fmt1dp(kpis.untappedUnits)} />
-        <Kpi label="Already running" value={fmtInt(kpis.running)} />
+      <div className="table-wrap" style={{ marginBottom: 16, maxHeight: 'none' }}>
+        <table className="data">
+          <thead>
+            <tr>
+              <th className="kw-col">Brand</th>
+              <th className="num">Keywords targeted</th>
+              <th className="num">Units sold/day</th>
+              <th className="num">Keyword volume/day</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="kw-cell">TOTAL</td>
+              <td className="num">{fmtInt(brandSummary.total.keywords)}</td>
+              <td className="num">{fmt1dp(brandSummary.total.units)}</td>
+              <td className="num">{fmtInt(brandSummary.total.vol)}</td>
+            </tr>
+            {brandSummary.list.map(b => (
+              <tr key={b.brand}>
+                <td className="kw-cell">{b.brand}</td>
+                <td className="num">{fmtInt(b.keywords)}</td>
+                <td className="num">{fmt1dp(b.units)}</td>
+                <td className="num">{fmtInt(b.vol)}</td>
+              </tr>
+            ))}
+            {brandSummary.list.length === 0 && (
+              <tr><td colSpan="4"><div className="empty-state">No keywords match these filters.</div></td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
 
       <div className="filters">
@@ -860,29 +876,22 @@ function AzGapsTab({ azRows, liveKwSet, liveConfigured }) {
         <select value={ktype} onChange={e => setKtype(e.target.value)}>
           {ktypes.map(t => <option key={t} value={t}>{t === 'All' ? 'All types' : t}</option>)}
         </select>
-        <div className="status-toggle">
-          <button className={status === 'untapped' ? 'active' : ''} onClick={() => setStatus('untapped')}>Untapped</button>
-          <button className={status === 'running' ? 'active' : ''} onClick={() => setStatus('running')}>Running</button>
-          <button className={status === 'all' ? 'active' : ''} onClick={() => setStatus('all')}>All</button>
-        </div>
         <label className="chk"><input type="checkbox" checked={qualifiedOnly} onChange={e => setQualifiedOnly(e.target.checked)} /> ✅ Qualified only</label>
         <div className="num-inline">Vol floor/day ≥ <input type="number" value={volFloor} onChange={e => setVolFloor(Number(e.target.value) || 0)} /></div>
         <div className="num-inline">Conv ≥ <input type="number" value={convPct} onChange={e => setConvPct(Number(e.target.value) || 0)} />% of benchmark</div>
-        <div className="spacer" />
-        <label className="chk"><input type="checkbox" checked={showIgnored} onChange={e => setShowIgnored(e.target.checked)} /> Show ignored</label>
-        {benchCaption && <div className="caption">Blended Amazon conversion by brand·type: {benchCaption}</div>}
+        {benchCaption && <div className="caption">Blended Amazon conversion by brand·type (used as the benchmark column): {benchCaption}</div>}
       </div>
 
       <div className="toolbar-row">
         <button className="export-btn" onClick={() => exportToExcel(filtered, [
           { label: 'Keyword', get: r => r.keyword },
-          { label: 'Units Sold/day', get: r => Number(r.unitsDay.toFixed(1)) },
           { label: 'Search Vol/day', get: r => Math.round(r.volDay) },
+          { label: 'Units Sold/day', get: r => Number(r.unitsDay.toFixed(1)) },
           { label: 'Conversion %', get: r => Number((r.conv * 100).toFixed(2)) },
+          { label: 'Benchmark %', get: r => Number((r.bench * 100).toFixed(2)) },
           { label: 'Brand', get: r => r.brand },
           { label: 'Type', get: r => r.ktype },
-          { label: 'Status', get: r => r.statusLabel },
-        ], 'az_bk_gaps_export.xlsx')}>⬇ Excel</button>
+        ], 'az_running_keywords_export.xlsx')}>⬇ Excel</button>
       </div>
 
       <div className="table-wrap">
@@ -890,44 +899,33 @@ function AzGapsTab({ azRows, liveKwSet, liveConfigured }) {
           <thead>
             <tr>
               <th className="kw-col">Keyword</th>
-              <th className="num">Units Sold/day</th>
               <th className="num">Search Vol/day</th>
+              <th className="num">Units Sold/day</th>
               <th className="num">Conversion %</th>
+              <th className="num">Benchmark %</th>
               <th>Brand</th>
               <th>Type</th>
-              <th>Status</th>
-              <th>Action</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && (
-              <tr><td colSpan="8"><div className="empty-state">No keywords match these filters.</div></td></tr>
+              <tr><td colSpan="7"><div className="empty-state">No keywords match these filters.</div></td></tr>
             )}
             {filtered.map(r => (
               <tr key={r.brand + '||' + r.keyword}>
                 <td className="kw-cell">{r.keyword}</td>
-                <td className="num">{fmt1dp(r.unitsDay)}</td>
                 <td className="num">{fmtInt(r.volDay)}</td>
+                <td className="num">{fmt1dp(r.unitsDay)}</td>
                 <td className="num">{(r.conv * 100).toFixed(2)}%</td>
+                <td className="num">{(r.bench * 100).toFixed(2)}%</td>
                 <td>{r.brand}</td>
                 <td><TypeBadge type={r.ktype} /></td>
-                <td><StatusBadge status={r.statusLabel} /></td>
-                <td>
-                  {r.ignored ? (
-                    <button className="action-btn undo" onClick={() => setIgnore(r.ignoreKeyVal, 'undo')}>↩ Un-ignore</button>
-                  ) : (!r.running && (
-                    <React.Fragment>
-                      <button className="action-btn" onClick={() => setIgnore(r.ignoreKeyVal, '2wk')}>⏸ 2wk</button>
-                      <button className="action-btn" onClick={() => setIgnore(r.ignoreKeyVal, 'forever')}>🚫 Forever</button>
-                    </React.Fragment>
-                  ))}
-                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <div className="footnote">Units Sold/day and Search Vol/day are 4-week weekly averages divided by 7 (from the Apps Script snapshot). Ranked by units/day — "doing well on Amazon" means units sold, not just search clicks.</div>
+      <div className="footnote">Ranked by Search Vol/day. Units Sold/day and Search Vol/day are 4-week weekly averages divided by 7 (from the Apps Script snapshot). Benchmark % is the blended Amazon conversion for that keyword's brand × type — Conversion % is compared against it (as a % of benchmark) by the Qualified-only filter above.</div>
     </div>
   );
 }
@@ -1006,7 +1004,7 @@ function App() {
 
       <div className="tabs">
         <button className={`tab-btn ${tab === 'kw' ? 'active' : ''}`} onClick={() => setTab('kw')}>🔎 Kw Explorer</button>
-        <button className={`tab-btn ${tab === 'az' ? 'active' : ''}`} onClick={() => setTab('az')}>🅰 AZ→BK Gaps</button>
+        <button className={`tab-btn ${tab === 'az' ? 'active' : ''}`} onClick={() => setTab('az')}>🅰 AZ Running Keywords</button>
       </div>
 
       {error && <div className="banner error">Couldn't load sheet data: {error}. Check that the workbook is link-shared and the gid is correct.</div>}
@@ -1015,7 +1013,7 @@ function App() {
       {!loading || lastLoaded ? (
         tab === 'kw'
           ? <KwExplorerTab recoRows={recoRows} catRevFn={catRevFn} liveKwSet={liveKwSet} liveConfigured={liveConfigured} salesConfigured={salesConfigured} />
-          : <AzGapsTab azRows={azRows} liveKwSet={liveKwSet} liveConfigured={liveConfigured} />
+          : <AzGapsTab azRows={azRows} />
       ) : null}
     </div>
   );

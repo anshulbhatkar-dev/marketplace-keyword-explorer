@@ -1,14 +1,15 @@
 # Marketplace Keyword Explorer
 
 A common repository for marketplace keyword-opportunity tooling — not a
-Blinkit-only tool. It currently ships two "which search terms should we be
-running that we aren't" tabs, and is meant to grow with more
-marketplaces/tabs over time without re-architecting:
+Blinkit-only tool. It currently ships two tabs, and is meant to grow with
+more marketplaces/tabs over time without re-architecting:
 
 - **🔎 Kw Explorer** — Blinkit's own keyword recommendation export, cross-checked
   against what you're already running on Blinkit.
-- **🅰 AZ→BK Gaps** — search terms doing well on Amazon (by units sold) that
-  you aren't running on Blinkit yet.
+- **🅰 AZ Running Keywords** — a standalone view of which search terms are
+  performing well on Amazon (ranked by search volume/day, with units sold
+  and a conversion-vs-benchmark column). No Blinkit tie-in — it doesn't
+  check what's running anywhere, it's just the Amazon signal on its own.
 
 One static `index.html`, React 18 + SheetJS + Babel loaded from CDN, all
 data fetched client-side from Google Sheets as CSV. No backend, no build
@@ -46,7 +47,10 @@ npm run dev
 
 It's a static file — any static server works (`npx serve`, `python3 -m http.server`, etc).
 
-## 3. Two things this build does NOT have yet (by design)
+## 3. Two things Kw Explorer does NOT have yet (by design)
+
+These apply to the **Kw Explorer** tab only — AZ Running Keywords has no
+Blinkit tie-in at all, by design, so neither of these affects it.
 
 The "is this keyword already running on Blinkit" signal and the "which
 category earns the most revenue" signal both come from other feeds (the
@@ -116,18 +120,20 @@ Every push to `main` auto-redeploys.
 - Bump `CONFIG.CACHE_VER` (e.g. `v1` → `v2`) any time you change a sheet's
   columns — that invalidates every user's cache immediately instead of
   waiting out the TTL.
-- Ignore/snooze state (the "⏸ 2wk" / "🚫 Forever" buttons) is
-  **per-browser**, stored in `localStorage` under `kwexpl_ignore` — it does
-  not sync across devices or teammates.
+- Ignore/snooze state (the "⏸ 2wk" / "🚫 Forever" buttons on **Kw Explorer
+  only** — AZ Running Keywords has no ignore feature) is **per-browser**,
+  stored in `localStorage` under `kwexpl_ignore` — it does not sync across
+  devices or teammates.
 
 ## 7. Adding another marketplace tab later
 
 The pattern to copy: a `CONFIG` block for the new sheet, a `parseX` +
 `aggregateX` function pair, a `<XTab>` component, and one more entry in the
 `tabs` switcher in `<App>`. Nothing else in the file needs to change —
-`fetchSheetCSV`, the IndexedDB cache, and the ignore-store helpers are all
-already generic (namespace ignore keys the way AZ→BK Gaps does, with a
-prefix, so they don't collide with other tabs).
+`fetchSheetCSV` and the IndexedDB cache are already generic. If your new
+tab needs an ignore/snooze feature, namespace its keys with a prefix (see
+`ignoreKey`'s optional `ns` argument) so they don't collide with Kw
+Explorer's.
 
 ## 8. File map
 
