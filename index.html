@@ -78,6 +78,8 @@
      as you scroll. */
   table.data.virtual tbody tr{height:40px;box-sizing:border-box;}
   table.data.virtual tbody td{padding-top:0;padding-bottom:0;}
+  table.data th.sortable{cursor:pointer;user-select:none;}
+  table.data th.sortable:hover{color:var(--brand);}
   table.data th{position:sticky;top:0;background:#fafbfc;font-size:11.5px;text-transform:uppercase;letter-spacing:.02em;
     color:var(--muted);z-index:2;font-weight:700;}
   table.data td.num, table.data th.num{text-align:right;}
@@ -822,6 +824,16 @@ function AzGapsTab({ azRows }) {
   const [qualifiedOnly, setQualifiedOnly] = React.useState(true);
   const [volFloor, setVolFloor] = React.useState(100);
   const [convPct, setConvPct] = React.useState(50);
+  const [sortKey, setSortKey] = React.useState('volDay');
+  const [sortDir, setSortDir] = React.useState('desc');
+
+  const SORT_IS_NUM = { keyword: false, volDay: true, unitsDay: true, conv: true, bench: true, brand: false, ktype: false };
+  const handleSort = (key) => {
+    if (key === sortKey) { setSortDir(d => (d === 'asc' ? 'desc' : 'asc')); return; }
+    setSortKey(key);
+    setSortDir(SORT_IS_NUM[key] ? 'desc' : 'asc'); // numbers default high-to-low, text default A-Z
+  };
+  const sortArrow = (key) => (key === sortKey ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
 
   // aggregateAmazon/fetch/parse never see qualifiedOnly, volFloor or convPct —
   // these are pure display-layer filters computed below; they cannot change
@@ -847,14 +859,26 @@ function AzGapsTab({ azRows }) {
     return true;
   });
 
+  const sorted = React.useMemo(() => {
+    const arr = filtered.slice();
+    const dir = sortDir === 'asc' ? 1 : -1;
+    arr.sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      if (SORT_IS_NUM[sortKey]) return (av - bv) * dir;
+      const as = String(av).toLowerCase(), bs = String(bv).toLowerCase();
+      return as < bs ? -1 * dir : as > bs ? 1 * dir : 0;
+    });
+    return arr;
+  }, [filtered, sortKey, sortDir]);
+
   // Virtualize the main table so "Qualified only" off (thousands of rows,
   // the full AZ Search snapshot dump) scrolls smoothly instead of freezing
   // the tab — only ~viewport-height-worth of rows are ever in the DOM.
   const scrollRef = React.useRef(null);
-  const { startIndex, endIndex } = useVirtualRows(scrollRef, filtered.length);
-  const visibleRows = filtered.slice(startIndex, endIndex);
+  const { startIndex, endIndex } = useVirtualRows(scrollRef, sorted.length);
+  const visibleRows = sorted.slice(startIndex, endIndex);
   const topPad = startIndex * VROW_HEIGHT;
-  const bottomPad = (filtered.length - endIndex) * VROW_HEIGHT;
+  const bottomPad = (sorted.length - endIndex) * VROW_HEIGHT;
 
   // Brand-wise summary of what's currently in view (updates as filters change).
   const brandSummary = React.useMemo(() => {
@@ -930,7 +954,7 @@ function AzGapsTab({ azRows }) {
       </div>
 
       <div className="toolbar-row">
-        <button className="export-btn" onClick={() => exportToExcel(filtered, [
+        <button className="export-btn" onClick={() => exportToExcel(sorted, [
           { label: 'Keyword', get: r => r.keyword },
           { label: 'Search Vol/day', get: r => Math.round(r.volDay) },
           { label: 'Units Sold/day', get: r => Number(r.unitsDay.toFixed(1)) },
@@ -945,17 +969,17 @@ function AzGapsTab({ azRows }) {
         <table className="data virtual">
           <thead>
             <tr>
-              <th className="kw-col">Keyword</th>
-              <th className="num">Search Vol/day</th>
-              <th className="num">Units Sold/day</th>
-              <th className="num">Conversion %</th>
-              <th className="num">Benchmark %</th>
-              <th>Brand</th>
-              <th>Type</th>
+              <th className="kw-col sortable" onClick={() => handleSort('keyword')}>Keyword{sortArrow('keyword')}</th>
+              <th className="num sortable" onClick={() => handleSort('volDay')}>Search Vol/day{sortArrow('volDay')}</th>
+              <th className="num sortable" onClick={() => handleSort('unitsDay')}>Units Sold/day{sortArrow('unitsDay')}</th>
+              <th className="num sortable" onClick={() => handleSort('conv')}>Conversion %{sortArrow('conv')}</th>
+              <th className="num sortable" onClick={() => handleSort('bench')}>Benchmark %{sortArrow('bench')}</th>
+              <th className="sortable" onClick={() => handleSort('brand')}>Brand{sortArrow('brand')}</th>
+              <th className="sortable" onClick={() => handleSort('ktype')}>Type{sortArrow('ktype')}</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 && (
+            {sorted.length === 0 && (
               <tr><td colSpan="7"><div className="empty-state">No keywords match these filters.</div></td></tr>
             )}
             {topPad > 0 && (
@@ -978,7 +1002,7 @@ function AzGapsTab({ azRows }) {
           </tbody>
         </table>
       </div>
-      <div className="footnote">Ranked by Search Vol/day. Showing {fmtInt(filtered.length)} keywords — scroll for all of them (rows render as you scroll, so this stays smooth even with the full ~9,800-row dump when "Qualified only" is off). Units Sold/day and Search Vol/day are 4-week weekly averages divided by 7 (from the Apps Script snapshot). Benchmark % is the blended Amazon conversion for that keyword's brand × type — Conversion % is compared against it (as a % of benchmark) by the Qualified-only filter above.</div>
+      <div className="footnote">Click a column header to sort (click again to flip direction) — default is Search Vol/day, high to low. Showing {fmtInt(sorted.length)} keywords — scroll for all of them (rows render as you scroll, so this stays smooth even with the full ~9,800-row dump when "Qualified only" is off). Units Sold/day and Search Vol/day are 4-week weekly averages divided by 7 (from the Apps Script snapshot). Benchmark % is the blended Amazon conversion for that keyword's brand × type — Conversion % is compared against it (as a % of benchmark) by the Qualified-only filter above.</div>
     </div>
   );
 }
