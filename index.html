@@ -206,11 +206,14 @@ async function idbSet(key, value) {
 
 // Fetch a tab's CSV via the gviz endpoint (works reliably by gid even on
 // link-shared, non-"published to web" workbooks — see README "gotchas").
-async function fetchSheetCSV(workbookId, gid, cacheKey) {
+// Pass force:true (the "Refresh data" button does) to skip the cache read
+// entirely — otherwise a manual refresh could silently keep serving data
+// that's up to CACHE_TTL_MS old, which defeats the point of the button.
+async function fetchSheetCSV(workbookId, gid, cacheKey, force) {
   const key = `mkt_sheet_${CONFIG.CACHE_VER}_${cacheKey}`;
-  const cached = await idbGet(key);
+  const cached = await idbGet(key); // read regardless, so a failed forced fetch still has a fallback
   const now = Date.now();
-  if (cached && (now - cached.ts) < CONFIG.CACHE_TTL_MS) {
+  if (!force && cached && (now - cached.ts) < CONFIG.CACHE_TTL_MS) {
     return { text: cached.text, fromCache: true };
   }
   const url = `https://docs.google.com/spreadsheets/d/${workbookId}/gviz/tq?tqx=out:csv&gid=${gid}`;
@@ -1026,16 +1029,20 @@ function App() {
 
   React.useEffect(() => {
     let cancelled = false;
+    // refreshTick 0 is the initial mount load (cache OK, fast); any click on
+    // "Refresh data" bumps refreshTick and forces a real network re-fetch —
+    // otherwise refresh could silently keep serving up-to-4h-old data.
+    const force = refreshTick > 0;
     async function load() {
       setLoading(true);
       setError(null);
       try {
         const jobs = [
-          fetchSheetCSV(CONFIG.RECO_WORKBOOK_ID, CONFIG.RECO_TAB_GID, 'reco_bk'),
-          fetchSheetCSV(CONFIG.RECO_WORKBOOK_ID, CONFIG.AZ_SNAPSHOT_GID, 'az_snap'),
+          fetchSheetCSV(CONFIG.RECO_WORKBOOK_ID, CONFIG.RECO_TAB_GID, 'reco_bk', force),
+          fetchSheetCSV(CONFIG.RECO_WORKBOOK_ID, CONFIG.AZ_SNAPSHOT_GID, 'az_snap', force),
         ];
-        if (liveConfigured) jobs.push(fetchSheetCSV(CONFIG.LIVE_ADS_WORKBOOK_ID, CONFIG.LIVE_ADS_TAB_GID, 'live_ads'));
-        if (salesConfigured) jobs.push(fetchSheetCSV(CONFIG.SALES_WORKBOOK_ID, CONFIG.SALES_TAB_GID, 'sales_import'));
+        if (liveConfigured) jobs.push(fetchSheetCSV(CONFIG.LIVE_ADS_WORKBOOK_ID, CONFIG.LIVE_ADS_TAB_GID, 'live_ads', force));
+        if (salesConfigured) jobs.push(fetchSheetCSV(CONFIG.SALES_WORKBOOK_ID, CONFIG.SALES_TAB_GID, 'sales_import', force));
         const results = await Promise.all(jobs);
         if (cancelled) return;
         setRecoText(results[0].text || '');
