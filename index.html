@@ -73,6 +73,11 @@
   .table-wrap{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);overflow:auto;max-height:70vh;}
   table.data{border-collapse:separate;border-spacing:0;width:100%;font-size:13px;}
   table.data th, table.data td{padding:9px 12px;text-align:left;white-space:nowrap;border-bottom:1px solid var(--border);}
+  /* Fixed row height on the virtualized table so the JS windowing math (VROW_HEIGHT)
+     matches real layout exactly — otherwise spacer rows drift out of sync with content
+     as you scroll. */
+  table.data.virtual tbody tr{height:40px;box-sizing:border-box;}
+  table.data.virtual tbody td{padding-top:0;padding-bottom:0;}
   table.data th{position:sticky;top:0;background:#fafbfc;font-size:11.5px;text-transform:uppercase;letter-spacing:.02em;
     color:var(--muted);z-index:2;font-weight:700;}
   table.data td.num, table.data th.num{text-align:right;}
@@ -577,6 +582,39 @@ function useDebounced(value, ms) {
   return v;
 }
 
+// Row virtualization: lets a scrollable table hold thousands of rows without
+// freezing the browser tab. Only the rows in (and just around) the visible
+// viewport are ever mounted in the DOM; two spacer <tr>s of the right height
+// stand in for everything scrolled out of view, so the scrollbar still feels
+// like it holds the full row count and scrolling stays smooth.
+const VROW_HEIGHT = 40; // px — must match the CSS row height below
+const VROW_OVERSCAN = 10; // extra rows rendered above/below the viewport
+
+function useVirtualRows(scrollRef, itemCount, rowHeight = VROW_HEIGHT, overscan = VROW_OVERSCAN) {
+  const [scrollTop, setScrollTop] = React.useState(0);
+  const [viewportH, setViewportH] = React.useState(600);
+
+  React.useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => setScrollTop(el.scrollTop);
+    const measure = () => setViewportH(el.clientHeight || 600);
+    measure();
+    onScroll();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', measure);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', measure);
+    };
+  }, [scrollRef]);
+
+  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const visibleCount = Math.ceil(viewportH / rowHeight) + overscan * 2;
+  const endIndex = Math.min(itemCount, startIndex + visibleCount);
+  return { startIndex, endIndex };
+}
+
 // ---------------------------------------------------------------------------
 // Small shared components
 // ---------------------------------------------------------------------------
@@ -809,6 +847,15 @@ function AzGapsTab({ azRows }) {
     return true;
   });
 
+  // Virtualize the main table so "Qualified only" off (thousands of rows,
+  // the full AZ Search snapshot dump) scrolls smoothly instead of freezing
+  // the tab — only ~viewport-height-worth of rows are ever in the DOM.
+  const scrollRef = React.useRef(null);
+  const { startIndex, endIndex } = useVirtualRows(scrollRef, filtered.length);
+  const visibleRows = filtered.slice(startIndex, endIndex);
+  const topPad = startIndex * VROW_HEIGHT;
+  const bottomPad = (filtered.length - endIndex) * VROW_HEIGHT;
+
   // Brand-wise summary of what's currently in view (updates as filters change).
   const brandSummary = React.useMemo(() => {
     const map = {};
@@ -894,8 +941,8 @@ function AzGapsTab({ azRows }) {
         ], 'az_running_keywords_export.xlsx')}>⬇ Excel</button>
       </div>
 
-      <div className="table-wrap">
-        <table className="data">
+      <div className="table-wrap" ref={scrollRef}>
+        <table className="data virtual">
           <thead>
             <tr>
               <th className="kw-col">Keyword</th>
@@ -911,7 +958,10 @@ function AzGapsTab({ azRows }) {
             {filtered.length === 0 && (
               <tr><td colSpan="7"><div className="empty-state">No keywords match these filters.</div></td></tr>
             )}
-            {filtered.map(r => (
+            {topPad > 0 && (
+              <tr aria-hidden="true" style={{ height: topPad }}><td colSpan="7" style={{ padding: 0, border: 'none' }} /></tr>
+            )}
+            {visibleRows.map(r => (
               <tr key={r.brand + '||' + r.keyword}>
                 <td className="kw-cell">{r.keyword}</td>
                 <td className="num">{fmtInt(r.volDay)}</td>
@@ -922,10 +972,13 @@ function AzGapsTab({ azRows }) {
                 <td><TypeBadge type={r.ktype} /></td>
               </tr>
             ))}
+            {bottomPad > 0 && (
+              <tr aria-hidden="true" style={{ height: bottomPad }}><td colSpan="7" style={{ padding: 0, border: 'none' }} /></tr>
+            )}
           </tbody>
         </table>
       </div>
-      <div className="footnote">Ranked by Search Vol/day. Units Sold/day and Search Vol/day are 4-week weekly averages divided by 7 (from the Apps Script snapshot). Benchmark % is the blended Amazon conversion for that keyword's brand × type — Conversion % is compared against it (as a % of benchmark) by the Qualified-only filter above.</div>
+      <div className="footnote">Ranked by Search Vol/day. Showing {fmtInt(filtered.length)} keywords — scroll for all of them (rows render as you scroll, so this stays smooth even with the full ~9,800-row dump when "Qualified only" is off). Units Sold/day and Search Vol/day are 4-week weekly averages divided by 7 (from the Apps Script snapshot). Benchmark % is the blended Amazon conversion for that keyword's brand × type — Conversion % is compared against it (as a % of benchmark) by the Qualified-only filter above.</div>
     </div>
   );
 }
