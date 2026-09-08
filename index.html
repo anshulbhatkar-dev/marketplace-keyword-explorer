@@ -65,10 +65,20 @@
   .filters .spacer{flex:1;}
   .filters .caption{width:100%;font-size:12px;color:var(--muted);margin-top:2px;}
 
-  .status-toggle{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden;}
-  .status-toggle button{border:none;background:#fff;padding:7px 12px;font-size:13px;cursor:pointer;color:var(--muted);font-weight:600;}
-  .status-toggle button.active{background:var(--brand);color:#fff;}
-  .status-toggle button + button{border-left:1px solid var(--border);}
+  .multiselect{position:relative;}
+  .ms-btn{border:1px solid var(--border);border-radius:7px;padding:7px 10px;font-size:13px;background:#fff;
+    color:var(--text);cursor:pointer;display:flex;align-items:center;gap:6px;white-space:nowrap;}
+  .ms-btn.active{border-color:var(--brand);color:var(--brand);}
+  .ms-caret{font-size:10px;color:var(--muted);}
+  .ms-panel{position:absolute;top:calc(100% + 4px);left:0;background:#fff;border:1px solid var(--border);
+    border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.1);padding:6px;min-width:190px;max-height:260px;
+    overflow:auto;z-index:10;}
+  .ms-panel-actions{display:flex;gap:8px;padding:2px 6px 6px;border-bottom:1px solid var(--border);margin-bottom:4px;}
+  .ms-panel-actions button{border:none;background:none;color:var(--brand);font-size:12px;font-weight:600;
+    cursor:pointer;padding:2px 4px;}
+  .ms-opt{display:flex;align-items:center;gap:8px;padding:5px 6px;font-size:13px;cursor:pointer;border-radius:5px;
+    white-space:nowrap;}
+  .ms-opt:hover{background:#fafbfc;}
 
   .table-wrap{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);overflow:auto;max-height:70vh;}
   table.data{border-collapse:separate;border-spacing:0;width:100%;font-size:13px;}
@@ -93,17 +103,9 @@
   .badge.type-generic{background:var(--blue-weak);color:var(--blue);}
   .badge.type-branded{background:var(--purple-weak);color:var(--purple);}
   .badge.type-competition{background:var(--red-weak);color:var(--red);}
-  .badge.status-running{background:var(--green-weak);color:var(--green);}
-  .badge.status-not-running{background:var(--red-weak);color:var(--red);}
-  .badge.status-ignored{background:#eee;color:var(--muted);}
 
   .cat-primary{font-weight:600;}
   .cat-more{color:var(--muted);font-size:12px;margin-left:4px;cursor:default;}
-
-  .action-btn{border:1px solid var(--border);background:#fff;border-radius:6px;padding:4px 9px;font-size:12px;
-    cursor:pointer;margin-right:4px;font-weight:600;color:var(--text);}
-  .action-btn:hover{background:#f2f2f2;}
-  .action-btn.undo{color:var(--brand);}
 
   .export-btn{background:var(--brand);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;
     font-weight:700;cursor:pointer;}
@@ -120,10 +122,10 @@
 
 <script type="application/jsx-source" id="app-source">
 /* ============================================================================
- * Marketplace Keyword Explorer — Kw Explorer + AZ Running Keywords
- * A common repository for marketplace keyword-opportunity tooling. Kw
- * Explorer sources Blinkit's own reco export; AZ Running Keywords is a
- * standalone Amazon keyword-performance view (no Blinkit tie-in). More
+ * Marketplace Keyword Explorer — Blinkit Suggested Keywords + AZ Running Keywords
+ * A common repository for marketplace keyword-opportunity tooling. Blinkit
+ * Suggested Keywords sources Blinkit's own reco export; AZ Running Keywords
+ * is a standalone Amazon keyword-performance view (no Blinkit tie-in). More
  * marketplaces/tabs can be added under this same app.
  * Single-file React app. Data source: Google Sheets (client-side CSV fetch,
  * no backend). See README.md for setup + deployment.
@@ -143,13 +145,6 @@ const CONFIG = {
   RECO_TAB_GID: '244896497',      // "Search reco BK"
   AZ_SNAPSHOT_GID: '1975500102',  // "AZ Search snapshot" (built by the Apps Script — see /google-apps-script)
 
-  // OPTIONAL — plug in your live Blinkit ad-performance export (Search rows:
-  // keyword, type, spend, impressions, date) to enable real "Running on BK"
-  // status. Leave WORKBOOK_ID blank to treat every keyword as "Not running"
-  // (the app will show a banner explaining this).
-  LIVE_ADS_WORKBOOK_ID: '',
-  LIVE_ADS_TAB_GID: '',
-
   // OPTIONAL — plug in your Sales-import feed (brand, category, units sold)
   // to rank a keyword's categories by revenue for the "primary category"
   // column. Leave WORKBOOK_ID blank to rank categories by search volume
@@ -159,7 +154,6 @@ const CONFIG = {
 };
 
 const LOOKBACK_DAYS_RECO = 14;
-const LOOKBACK_DAYS_LIVE = 14;
 const LOOKBACK_WEEKS_AZ = 4; // informational only; the Apps Script already trims to 4 weeks
 
 // ---------------------------------------------------------------------------
@@ -292,30 +286,6 @@ function fmt1dp(n) {
 }
 
 // ---------------------------------------------------------------------------
-// Ignore / snooze store (browser-local, localStorage)
-// ---------------------------------------------------------------------------
-const IGNORE_LS_KEY = 'kwexpl_ignore';
-
-function loadIgnoreMap() {
-  let map = {};
-  try { map = JSON.parse(localStorage.getItem(IGNORE_LS_KEY) || '{}'); } catch (e) { map = {}; }
-  const now = Date.now();
-  let changed = false;
-  Object.keys(map).forEach(k => {
-    if (map[k] !== 'forever' && Number(map[k]) < now) { delete map[k]; changed = true; }
-  });
-  if (changed) saveIgnoreMap(map);
-  return map;
-}
-function saveIgnoreMap(map) {
-  try { localStorage.setItem(IGNORE_LS_KEY, JSON.stringify(map)); } catch (e) {}
-}
-function ignoreKey(brand, keyword, ns) {
-  const base = `${String(brand).toLowerCase()}||${String(keyword).toLowerCase()}`;
-  return ns ? `${ns}||${base}` : base;
-}
-
-// ---------------------------------------------------------------------------
 // Keyword Explorer (Blinkit reco) — parse + aggregate
 // ---------------------------------------------------------------------------
 function parseRecoKeywords(text) {
@@ -412,55 +382,6 @@ function aggregateReco(recs, catRevFn) {
 
   out.sort((a, b) => b.searches - a.searches);
   return out;
-}
-
-// ---------------------------------------------------------------------------
-// Live "running on BK" set (optional feed — see CONFIG.LIVE_ADS_*)
-// ---------------------------------------------------------------------------
-function parseLiveAdsRows(text) {
-  const rows = parseCSV(text);
-  if (!rows.length) return [];
-  const headerIdx = findHeaderRow(rows, ['keyword']);
-  const header = rows[headerIdx].map(normHeader);
-  const col = (test) => { for (let c = 0; c < header.length; c++) if (test(header[c])) return c; return -1; };
-  const ci = {
-    brand: col(h => h === 'brand'),
-    keyword: col(h => h === 'keyword'),
-    type: col(h => h === 'type' || h.indexOf('ad type') >= 0),
-    spend: col(h => h.indexOf('spend') >= 0),
-    impressions: col(h => h.indexOf('impression') >= 0),
-    date: col(h => h.indexOf('date') >= 0),
-  };
-  const out = [];
-  for (let r = headerIdx + 1; r < rows.length; r++) {
-    const row = rows[r];
-    const keyword = String(row[ci.keyword] || '').trim();
-    const brand = String(row[ci.brand] || '').trim();
-    if (!keyword || !brand) continue;
-    out.push({
-      brand, keyword,
-      type: String(row[ci.type] || '').trim(),
-      spend: toNumber(row[ci.spend]),
-      impressions: toNumber(row[ci.impressions]),
-      date: parseDate(row[ci.date]),
-    });
-  }
-  return out;
-}
-
-function buildLiveKwSet(rows) {
-  const set = new Set();
-  if (!rows.length) return set;
-  let maxDate = null;
-  rows.forEach(r => { if (r.date && (!maxDate || r.date > maxDate)) maxDate = r.date; });
-  const cutoff = maxDate ? new Date(maxDate.getTime() - (LOOKBACK_DAYS_LIVE - 1) * 86400000) : null;
-  rows.forEach(r => {
-    if (r.type !== 'Search') return;
-    if (cutoff && r.date && r.date < cutoff) return;
-    if (!(r.spend > 0 || r.impressions > 0)) return;
-    set.add(`${r.brand.toLowerCase()}||${r.keyword.toLowerCase()}`);
-  });
-  return set;
 }
 
 // ---------------------------------------------------------------------------
@@ -565,19 +486,6 @@ function computeBenchmarks(rows) {
 // ---------------------------------------------------------------------------
 // Small hooks
 // ---------------------------------------------------------------------------
-function useIgnoreMap() {
-  const [map, setMap] = React.useState(() => loadIgnoreMap());
-  const setIgnore = (key, mode) => {
-    const next = { ...map };
-    if (mode === 'undo') delete next[key];
-    else if (mode === 'forever') next[key] = 'forever';
-    else next[key] = Date.now() + 14 * 86400000; // 2 weeks
-    setMap(next);
-    saveIgnoreMap(next);
-  };
-  return [map, setIgnore];
-}
-
 function useDebounced(value, ms) {
   const [v, setV] = React.useState(value);
   React.useEffect(() => {
@@ -638,10 +546,50 @@ function TypeBadge({ type }) {
   return <span className={`badge ${cls}`}>{type || 'Generic'}</span>;
 }
 
-function StatusBadge({ status }) {
-  const cls = status === 'Running' ? 'status-running' : status === 'Ignored' ? 'status-ignored' : 'status-not-running';
-  const label = status === 'Running' ? '🟢 Running' : status === 'Ignored' ? '⏸ Ignored' : '🔴 Not running';
-  return <span className={`badge ${cls}`}>{label}</span>;
+// Multi-select filter: a button showing the current selection summary, with a
+// checkbox dropdown panel. An empty `selected` array means "All" (no filter
+// applied) — this matches how every other filter in the app defaults to All.
+function MultiSelect({ label, options, selected, onChange }) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  const toggle = (opt) => {
+    onChange(selected.includes(opt) ? selected.filter(v => v !== opt) : [...selected, opt]);
+  };
+  const buttonLabel = selected.length === 0
+    ? `All ${label}`
+    : selected.length === 1
+      ? selected[0]
+      : `${selected.length} ${label} selected`;
+
+  return (
+    <div className="multiselect" ref={ref}>
+      <button type="button" className={`ms-btn ${selected.length ? 'active' : ''}`} onClick={() => setOpen(o => !o)}>
+        {buttonLabel}<span className="ms-caret">▾</span>
+      </button>
+      {open && (
+        <div className="ms-panel">
+          <div className="ms-panel-actions">
+            <button type="button" onClick={() => onChange([])}>Clear</button>
+            <button type="button" onClick={() => onChange(options)}>Select all</button>
+          </div>
+          {options.map(opt => (
+            <label key={opt} className="ms-opt">
+              <input type="checkbox" checked={selected.includes(opt)} onChange={() => toggle(opt)} />
+              {opt}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function exportToExcel(rows, columns, filename) {
@@ -659,67 +607,60 @@ function exportToExcel(rows, columns, filename) {
 }
 
 // ===========================================================================
-// Tab 1: Keyword Explorer
+// Tab 1: Blinkit Suggested Keywords
 // ===========================================================================
-function KwExplorerTab({ recoRows, catRevFn, liveKwSet, liveConfigured, salesConfigured }) {
-  const [ignoreMap, setIgnore] = useIgnoreMap();
+function KwExplorerTab({ recoRows, catRevFn, salesConfigured }) {
   const [q, setQ] = React.useState('');
   const qd = useDebounced(q, 200);
-  const [brand, setBrand] = React.useState('All');
-  const [category, setCategory] = React.useState('All');
-  const [ktype, setKtype] = React.useState('All');
-  const [status, setStatus] = React.useState('untapped'); // untapped | running | all
+  const [brands, setBrands] = React.useState([]);       // [] = All
+  const [categories, setCategories] = React.useState([]); // [] = All
+  const [ktypes, setKtypes] = React.useState([]);         // [] = All
   const [trendingOnly, setTrendingOnly] = React.useState(false);
-  const [showIgnored, setShowIgnored] = React.useState(false);
+  const [sortKey, setSortKey] = React.useState('searches');
+  const [sortDir, setSortDir] = React.useState('desc');
 
-  const aggregated = React.useMemo(() => aggregateReco(recoRows, catRevFn), [recoRows, catRevFn]);
+  const SORT_IS_NUM = { keyword: false, searches: true, brand: false, primaryCategory: false, ktype: false };
+  const handleSort = (key) => {
+    if (key === sortKey) { setSortDir(d => (d === 'asc' ? 'desc' : 'asc')); return; }
+    setSortKey(key);
+    setSortDir(SORT_IS_NUM[key] ? 'desc' : 'asc');
+  };
+  const sortArrow = (key) => (key === sortKey ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
 
-  const rows = React.useMemo(() => aggregated.map(r => {
-    const key = ignoreKey(r.brand, r.keyword);
-    const ignoreVal = ignoreMap[key];
-    const ignored = ignoreVal === 'forever' || (typeof ignoreVal === 'number' && ignoreVal > Date.now());
-    const running = liveKwSet.has(`${r.brand.toLowerCase()}||${r.keyword.toLowerCase()}`);
-    const statusLabel = ignored ? 'Ignored' : running ? 'Running' : 'Not running';
-    return { ...r, ignored, running, statusLabel, ignoreKeyVal: key };
-  }), [aggregated, ignoreMap, liveKwSet]);
+  const rows = React.useMemo(() => aggregateReco(recoRows, catRevFn), [recoRows, catRevFn]);
 
-  const brands = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.brand))).sort()], [rows]);
-  const categories = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.primaryCategory).filter(Boolean))).sort()], [rows]);
-  const ktypes = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.ktype))).sort()], [rows]);
+  const brandOptions = React.useMemo(() => Array.from(new Set(rows.map(r => r.brand))).sort(), [rows]);
+  const categoryOptions = React.useMemo(() => Array.from(new Set(rows.map(r => r.primaryCategory).filter(Boolean))).sort(), [rows]);
+  const ktypeOptions = React.useMemo(() => Array.from(new Set(rows.map(r => r.ktype))).sort(), [rows]);
 
   const filtered = rows.filter(r => {
-    if (!showIgnored && r.ignored) return false;
-    if (showIgnored && !r.ignored) return false;
-    if (status === 'untapped' && r.running) return false;
-    if (status === 'running' && !r.running) return false;
-    if (brand !== 'All' && r.brand !== brand) return false;
-    if (category !== 'All' && r.primaryCategory !== category) return false;
-    if (ktype !== 'All' && r.ktype !== ktype) return false;
+    if (brands.length && !brands.includes(r.brand)) return false;
+    if (categories.length && !categories.includes(r.primaryCategory)) return false;
+    if (ktypes.length && !ktypes.includes(r.ktype)) return false;
     if (trendingOnly && !r.trending) return false;
     if (qd && r.keyword.toLowerCase().indexOf(qd.toLowerCase()) < 0) return false;
     return true;
   });
 
-  const kpis = React.useMemo(() => {
-    const base = rows.filter(r => !r.ignored || showIgnored);
-    const untapped = rows.filter(r => !r.running && !r.ignored);
-    return {
-      suggested: rows.length,
-      untapped: untapped.length,
-      untappedVol: untapped.reduce((s, r) => s + r.searches, 0),
-      running: rows.filter(r => r.running).length,
-    };
-  }, [rows]);
+  const sorted = React.useMemo(() => {
+    const arr = filtered.slice();
+    const dir = sortDir === 'asc' ? 1 : -1;
+    arr.sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      if (SORT_IS_NUM[sortKey]) return (av - bv) * dir;
+      const as = String(av || '').toLowerCase(), bs = String(bv || '').toLowerCase();
+      return as < bs ? -1 * dir : as > bs ? 1 * dir : 0;
+    });
+    return arr;
+  }, [filtered, sortKey, sortDir]);
+
+  const kpis = React.useMemo(() => ({
+    suggested: rows.length,
+    trending: rows.filter(r => r.trending).length,
+  }), [rows]);
 
   return (
     <div>
-      {!liveConfigured && (
-        <div className="banner warn">
-          "Running on BK" isn't wired to a live ad-performance feed yet, so every keyword below shows
-          as <b>Not running</b>. Set <code>CONFIG.LIVE_ADS_WORKBOOK_ID</code> / <code>LIVE_ADS_TAB_GID</code> in
-          index.html to enable real status (see README).
-        </div>
-      )}
       {!salesConfigured && (
         <div className="banner warn">
           Category ranking is using search volume as a proxy (no <code>CONFIG.SALES_WORKBOOK_ID</code> configured),
@@ -729,34 +670,19 @@ function KwExplorerTab({ recoRows, catRevFn, liveKwSet, liveConfigured, salesCon
 
       <div className="kpi-row">
         <Kpi label="Suggested keywords" value={fmtInt(kpis.suggested)} />
-        <Kpi label="Untapped (no ads)" value={fmtInt(kpis.untapped)} />
-        <Kpi label="Untapped search vol" value={fmtInt(kpis.untappedVol)} />
-        <Kpi label="Already running" value={fmtInt(kpis.running)} />
+        <Kpi label="Trending" value={fmtInt(kpis.trending)} />
       </div>
 
       <div className="filters">
         <input type="text" placeholder="Search keyword…" value={q} onChange={e => setQ(e.target.value)} />
-        <select value={brand} onChange={e => setBrand(e.target.value)}>
-          {brands.map(b => <option key={b} value={b}>{b === 'All' ? 'All brands' : b}</option>)}
-        </select>
-        <select value={category} onChange={e => setCategory(e.target.value)}>
-          {categories.map(c => <option key={c} value={c}>{c === 'All' ? 'All categories' : c}</option>)}
-        </select>
-        <select value={ktype} onChange={e => setKtype(e.target.value)}>
-          {ktypes.map(t => <option key={t} value={t}>{t === 'All' ? 'All types' : t}</option>)}
-        </select>
-        <div className="status-toggle">
-          <button className={status === 'untapped' ? 'active' : ''} onClick={() => setStatus('untapped')}>Untapped</button>
-          <button className={status === 'running' ? 'active' : ''} onClick={() => setStatus('running')}>Running</button>
-          <button className={status === 'all' ? 'active' : ''} onClick={() => setStatus('all')}>All</button>
-        </div>
+        <MultiSelect label="brands" options={brandOptions} selected={brands} onChange={setBrands} />
+        <MultiSelect label="categories" options={categoryOptions} selected={categories} onChange={setCategories} />
+        <MultiSelect label="types" options={ktypeOptions} selected={ktypes} onChange={setKtypes} />
         <label className="chk"><input type="checkbox" checked={trendingOnly} onChange={e => setTrendingOnly(e.target.checked)} /> 🔥 Trending only</label>
-        <div className="spacer" />
-        <label className="chk"><input type="checkbox" checked={showIgnored} onChange={e => setShowIgnored(e.target.checked)} /> Show ignored</label>
       </div>
 
       <div className="toolbar-row">
-        <button className="export-btn" onClick={() => exportToExcel(filtered, [
+        <button className="export-btn" onClick={() => exportToExcel(sorted, [
           { label: 'Keyword', get: r => r.keyword },
           { label: 'Search DRR (max 14d)', get: r => Math.round(r.searches) },
           { label: 'Brand', get: r => r.brand },
@@ -764,28 +690,25 @@ function KwExplorerTab({ recoRows, catRevFn, liveKwSet, liveConfigured, salesCon
           { label: 'Other Categories', get: r => r.categories.slice(1).map(c => c.category).join(', ') },
           { label: 'Type', get: r => r.ktype },
           { label: 'Trending', get: r => r.trending ? 'Yes' : 'No' },
-          { label: 'Status', get: r => r.statusLabel },
-        ], 'kw_explorer_export.xlsx')}>⬇ Excel</button>
+        ], 'blinkit_suggested_keywords_export.xlsx')}>⬇ Excel</button>
       </div>
 
       <div className="table-wrap">
         <table className="data">
           <thead>
             <tr>
-              <th className="kw-col">Keyword</th>
-              <th className="num">Search DRR</th>
-              <th>Brand</th>
-              <th>Category</th>
-              <th>Type</th>
-              <th>Status</th>
-              <th>Action</th>
+              <th className="kw-col sortable" onClick={() => handleSort('keyword')}>Keyword{sortArrow('keyword')}</th>
+              <th className="num sortable" onClick={() => handleSort('searches')}>Search DRR{sortArrow('searches')}</th>
+              <th className="sortable" onClick={() => handleSort('brand')}>Brand{sortArrow('brand')}</th>
+              <th className="sortable" onClick={() => handleSort('primaryCategory')}>Category{sortArrow('primaryCategory')}</th>
+              <th className="sortable" onClick={() => handleSort('ktype')}>Type{sortArrow('ktype')}</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 && (
-              <tr><td colSpan="7"><div className="empty-state">No keywords match these filters.</div></td></tr>
+            {sorted.length === 0 && (
+              <tr><td colSpan="5"><div className="empty-state">No keywords match these filters.</div></td></tr>
             )}
-            {filtered.map(r => (
+            {sorted.map(r => (
               <tr key={r.brand + '||' + r.keyword}>
                 <td className="kw-cell">{r.keyword}{r.trending && <span className="badge fire type-competition">🔥</span>}</td>
                 <td className="num">{fmtInt(r.searches)}</td>
@@ -795,23 +718,12 @@ function KwExplorerTab({ recoRows, catRevFn, liveKwSet, liveConfigured, salesCon
                   {r.moreCount > 0 && <span className="cat-more" title={r.categories.slice(1).map(c => c.category).join(', ')}>+{r.moreCount} more</span>}
                 </td>
                 <td><TypeBadge type={r.ktype} /></td>
-                <td><StatusBadge status={r.statusLabel} /></td>
-                <td>
-                  {r.ignored ? (
-                    <button className="action-btn undo" onClick={() => setIgnore(r.ignoreKeyVal, 'undo')}>↩ Un-ignore</button>
-                  ) : (!r.running && (
-                    <React.Fragment>
-                      <button className="action-btn" onClick={() => setIgnore(r.ignoreKeyVal, '2wk')}>⏸ 2wk</button>
-                      <button className="action-btn" onClick={() => setIgnore(r.ignoreKeyVal, 'forever')}>🚫 Forever</button>
-                    </React.Fragment>
-                  ))}
-                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <div className="footnote">Search DRR = max 30-day search volume seen in the last 14 days, per keyword × brand. Categories ranked by {salesConfigured ? 'revenue' : 'search volume (revenue feed not configured)'}.</div>
+      <div className="footnote">Click a column header to sort (click again to flip direction) — default is Search DRR, high to low. Search DRR = max 30-day search volume seen in the last 14 days, per keyword × brand. Categories ranked by {salesConfigured ? 'revenue' : 'search volume (revenue feed not configured)'}.</div>
     </div>
   );
 }
@@ -1019,12 +931,10 @@ function App() {
   const [error, setError] = React.useState(null);
   const [recoText, setRecoText] = React.useState('');
   const [azText, setAzText] = React.useState('');
-  const [liveText, setLiveText] = React.useState('');
   const [salesText, setSalesText] = React.useState('');
   const [lastLoaded, setLastLoaded] = React.useState(null);
   const [refreshTick, setRefreshTick] = React.useState(0);
 
-  const liveConfigured = !!CONFIG.LIVE_ADS_WORKBOOK_ID;
   const salesConfigured = !!CONFIG.SALES_WORKBOOK_ID;
 
   React.useEffect(() => {
@@ -1041,14 +951,12 @@ function App() {
           fetchSheetCSV(CONFIG.RECO_WORKBOOK_ID, CONFIG.RECO_TAB_GID, 'reco_bk', force),
           fetchSheetCSV(CONFIG.RECO_WORKBOOK_ID, CONFIG.AZ_SNAPSHOT_GID, 'az_snap', force),
         ];
-        if (liveConfigured) jobs.push(fetchSheetCSV(CONFIG.LIVE_ADS_WORKBOOK_ID, CONFIG.LIVE_ADS_TAB_GID, 'live_ads', force));
         if (salesConfigured) jobs.push(fetchSheetCSV(CONFIG.SALES_WORKBOOK_ID, CONFIG.SALES_TAB_GID, 'sales_import', force));
         const results = await Promise.all(jobs);
         if (cancelled) return;
         setRecoText(results[0].text || '');
         setAzText(results[1].text || '');
-        if (liveConfigured) setLiveText(results[2].text || '');
-        if (salesConfigured) setSalesText(results[liveConfigured ? 3 : 2].text || '');
+        if (salesConfigured) setSalesText(results[2].text || '');
         setLastLoaded(new Date());
       } catch (err) {
         if (!cancelled) setError(err.message || String(err));
@@ -1062,9 +970,7 @@ function App() {
 
   const recoRows = React.useMemo(() => recoText ? parseRecoKeywords(recoText) : [], [recoText]);
   const azRows = React.useMemo(() => azText ? parseAmazonSnapshot(azText) : [], [azText]);
-  const liveRows = React.useMemo(() => liveText ? parseLiveAdsRows(liveText) : [], [liveText]);
   const salesRows = React.useMemo(() => salesText ? parseSalesRows(salesText) : [], [salesText]);
-  const liveKwSet = React.useMemo(() => buildLiveKwSet(liveRows), [liveRows]);
   const catRevMap = React.useMemo(() => buildCatRevMap(salesRows), [salesRows]);
   const catRevFn = React.useCallback((brand, category) => {
     if (!salesConfigured) return null;
@@ -1087,7 +993,7 @@ function App() {
       </div>
 
       <div className="tabs">
-        <button className={`tab-btn ${tab === 'kw' ? 'active' : ''}`} onClick={() => setTab('kw')}>🔎 Kw Explorer</button>
+        <button className={`tab-btn ${tab === 'kw' ? 'active' : ''}`} onClick={() => setTab('kw')}>🔎 Blinkit Suggested Keywords</button>
         <button className={`tab-btn ${tab === 'az' ? 'active' : ''}`} onClick={() => setTab('az')}>🅰 AZ Running Keywords</button>
       </div>
 
@@ -1096,7 +1002,7 @@ function App() {
 
       {!loading || lastLoaded ? (
         tab === 'kw'
-          ? <KwExplorerTab recoRows={recoRows} catRevFn={catRevFn} liveKwSet={liveKwSet} liveConfigured={liveConfigured} salesConfigured={salesConfigured} />
+          ? <KwExplorerTab recoRows={recoRows} catRevFn={catRevFn} salesConfigured={salesConfigured} />
           : <AzGapsTab azRows={azRows} />
       ) : null}
     </div>
