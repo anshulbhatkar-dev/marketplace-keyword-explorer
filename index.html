@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Marketplace Keyword Explorer</title>
+
+<!-- React 18 UMD -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<!-- SheetJS (Excel export) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- Babel standalone (in-browser JSX transform) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+
+<style>
+  :root{
+    --bg:#f5f6f8; --panel:#ffffff; --border:#e2e5ea; --text:#1c2128; --muted:#6b7280;
+    --brand:#5b3df5; --brand-weak:#efeafe;
+    --green:#0f9d58; --green-weak:#e6f6ec;
+    --red:#d93025; --red-weak:#fdeceb;
+    --purple:#8e24aa; --purple-weak:#f5e8f8;
+    --blue:#1a73e8; --blue-weak:#e8f0fe;
+    --amber:#e37400; --amber-weak:#fdeedd;
+    --radius:10px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  #root{min-height:100vh;}
+
+  .app{max-width:1400px;margin:0 auto;padding:20px 24px 60px;}
+  .app-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;}
+  .app-header h1{font-size:20px;margin:0;font-weight:700;}
+  .app-header .sub{color:var(--muted);font-size:13px;margin-top:2px;}
+  .refresh-btn{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:8px 14px;
+    font-size:13px;cursor:pointer;font-weight:600;color:var(--text);}
+  .refresh-btn:hover{background:#fafafa;}
+  .refresh-btn:disabled{opacity:.5;cursor:default;}
+
+  .tabs{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--border);}
+  .tab-btn{background:none;border:none;padding:10px 16px;font-size:14px;font-weight:600;color:var(--muted);
+    cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
+  .tab-btn.active{color:var(--brand);border-bottom-color:var(--brand);}
+  .tab-btn:hover{color:var(--text);}
+
+  .banner{border-radius:var(--radius);padding:10px 14px;font-size:13px;margin-bottom:14px;border:1px solid transparent;}
+  .banner.warn{background:var(--amber-weak);border-color:#f3d9b1;color:#7a4a05;}
+  .banner.error{background:var(--red-weak);border-color:#f3c2bd;color:#8a1f16;}
+  .banner code{background:rgba(0,0,0,.06);padding:1px 5px;border-radius:4px;font-size:12px;}
+
+  .kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:16px;}
+  .kpi-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;}
+  .kpi-card .label{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.02em;}
+  .kpi-card .value{font-size:22px;font-weight:700;margin-top:4px;}
+
+  .filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--border);
+    border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;}
+  .filters input[type="text"], .filters select, .filters input[type="number"]{
+    border:1px solid var(--border);border-radius:7px;padding:7px 10px;font-size:13px;background:#fff;color:var(--text);}
+  .filters input[type="text"]{min-width:200px;}
+  .filters label.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text);cursor:pointer;user-select:none;}
+  .filters .num-inline{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);}
+  .filters .num-inline input{width:70px;}
+  .filters .spacer{flex:1;}
+  .filters .caption{width:100%;font-size:12px;color:var(--muted);margin-top:2px;}
+
+  .status-toggle{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden;}
+  .status-toggle button{border:none;background:#fff;padding:7px 12px;font-size:13px;cursor:pointer;color:var(--muted);font-weight:600;}
+  .status-toggle button.active{background:var(--brand);color:#fff;}
+  .status-toggle button + button{border-left:1px solid var(--border);}
+
+  .table-wrap{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);overflow:auto;max-height:70vh;}
+  table.data{border-collapse:separate;border-spacing:0;width:100%;font-size:13px;}
+  table.data th, table.data td{padding:9px 12px;text-align:left;white-space:nowrap;border-bottom:1px solid var(--border);}
+  table.data th{position:sticky;top:0;background:#fafbfc;font-size:11.5px;text-transform:uppercase;letter-spacing:.02em;
+    color:var(--muted);z-index:2;font-weight:700;}
+  table.data td.num, table.data th.num{text-align:right;}
+  table.data tbody tr:hover{background:#fafbfc;}
+  table.data td.kw-cell, table.data th.kw-col{position:sticky;left:0;background:#fff;z-index:1;font-weight:600;}
+  table.data th.kw-col{background:#fafbfc;z-index:3;}
+  table.data tbody tr:hover td.kw-cell{background:#fafbfc;}
+
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;}
+  .badge.fire{margin-left:6px;}
+  .badge.type-generic{background:var(--blue-weak);color:var(--blue);}
+  .badge.type-branded{background:var(--purple-weak);color:var(--purple);}
+  .badge.type-competition{background:var(--red-weak);color:var(--red);}
+  .badge.status-running{background:var(--green-weak);color:var(--green);}
+  .badge.status-not-running{background:var(--red-weak);color:var(--red);}
+  .badge.status-ignored{background:#eee;color:var(--muted);}
+
+  .cat-primary{font-weight:600;}
+  .cat-more{color:var(--muted);font-size:12px;margin-left:4px;cursor:default;}
+
+  .action-btn{border:1px solid var(--border);background:#fff;border-radius:6px;padding:4px 9px;font-size:12px;
+    cursor:pointer;margin-right:4px;font-weight:600;color:var(--text);}
+  .action-btn:hover{background:#f2f2f2;}
+  .action-btn.undo{color:var(--brand);}
+
+  .export-btn{background:var(--brand);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;
+    font-weight:700;cursor:pointer;}
+  .export-btn:hover{opacity:.92;}
+  .toolbar-row{display:flex;justify-content:flex-end;margin-bottom:10px;}
+
+  .empty-state{padding:40px;text-align:center;color:var(--muted);font-size:14px;}
+  .loading-state{padding:40px;text-align:center;color:var(--muted);font-size:14px;}
+  .footnote{font-size:11.5px;color:var(--muted);margin-top:8px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="application/jsx-source" id="app-source">
+/* ============================================================================
+ * Marketplace Keyword Explorer — Kw Explorer + AZ->BK Gaps
+ * A common repository for marketplace keyword-opportunity tooling. This
+ * build's two tabs source Blinkit's own reco export and an Amazon->Blinkit
+ * comparison; more marketplaces/tabs can be added under this same app.
+ * Single-file React app. Data source: Google Sheets (client-side CSV fetch,
+ * no backend). See README.md for setup + deployment.
+ * ==========================================================================*/
+
+// ---------------------------------------------------------------------------
+// CONFIG — edit these to point at your own sheets. No other code changes
+// should be needed to re-point this dashboard at a different workbook.
+// ---------------------------------------------------------------------------
+const CONFIG = {
+  // Bump this on any schema change to force a fresh pull for all users.
+  CACHE_VER: 'v1',
+  CACHE_TTL_MS: 4 * 60 * 60 * 1000, // 4 hours
+
+  // Workbook that holds both the Blinkit reco export and the AZ snapshot tab.
+  RECO_WORKBOOK_ID: '1UkeDfFaziuZZtA6jVixDAu1dsgbWbW6DX1MQcwYtYug',
+  RECO_TAB_GID: '244896497',      // "Search reco BK"
+  AZ_SNAPSHOT_GID: '1975500102',  // "AZ Search snapshot" (built by the Apps Script — see /google-apps-script)
+
+  // OPTIONAL — plug in your live Blinkit ad-performance export (Search rows:
+  // keyword, type, spend, impressions, date) to enable real "Running on BK"
+  // status. Leave WORKBOOK_ID blank to treat every keyword as "Not running"
+  // (the app will show a banner explaining this).
+  LIVE_ADS_WORKBOOK_ID: '',
+  LIVE_ADS_TAB_GID: '',
+
+  // OPTIONAL — plug in your Sales-import feed (brand, category, units sold)
+  // to rank a keyword's categories by revenue for the "primary category"
+  // column. Leave WORKBOOK_ID blank to rank categories by search volume
+  // instead (a reasonable proxy, just not revenue-true).
+  SALES_WORKBOOK_ID: '',
+  SALES_TAB_GID: '',
+};
+
+const LOOKBACK_DAYS_RECO = 14;
+const LOOKBACK_DAYS_LIVE = 14;
+const LOOKBACK_WEEKS_AZ = 4; // informational only; the Apps Script already trims to 4 weeks
+
+// ---------------------------------------------------------------------------
+// IndexedDB cache
+// ---------------------------------------------------------------------------
+const IDB_NAME = 'marketplace_kwexpl_cache';
+const IDB_STORE = 'sheets';
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbGet(key) {
+  try {
+    const db = await idbOpen();
+    return await new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const req = tx.objectStore(IDB_STORE).get(key);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch (e) { return null; }
+}
+
+async function idbSet(key, value) {
+  try {
+    const db = await idbOpen();
+    await new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch (e) { /* best-effort cache */ }
+}
+
+// Fetch a tab's CSV via the gviz endpoint (works reliably by gid even on
+// link-shared, non-"published to web" workbooks — see README "gotchas").
+async function fetchSheetCSV(workbookId, gid, cacheKey) {
+  const key = `mkt_sheet_${CONFIG.CACHE_VER}_${cacheKey}`;
+  const cached = await idbGet(key);
+  const now = Date.now();
+  if (cached && (now - cached.ts) < CONFIG.CACHE_TTL_MS) {
+    return { text: cached.text, fromCache: true };
+  }
+  const url = `https://docs.google.com/spreadsheets/d/${workbookId}/gviz/tq?tqx=out:csv&gid=${gid}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    await idbSet(key, { text, ts: now });
+    return { text, fromCache: false };
+  } catch (err) {
+    if (cached) return { text: cached.text, fromCache: true, stale: true };
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CSV parsing (handles quoted fields with embedded commas/newlines)
+// ---------------------------------------------------------------------------
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else if (c === '\r') { /* skip */ }
+      else field += c;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(c => String(c).trim() !== ''));
+}
+
+function normHeader(h) { return String(h || '').toLowerCase().trim(); }
+
+function findHeaderRow(rows, requiredNorms) {
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const norms = rows[i].map(normHeader);
+    if (requiredNorms.every(req => norms.some(n => n.indexOf(req) >= 0))) return i;
+  }
+  return 0;
+}
+
+function toNumber(v) {
+  if (v === null || v === undefined) return 0;
+  const n = Number(String(v).replace(/,/g, '').trim());
+  return isNaN(n) ? 0 : n;
+}
+
+// Tolerates YYYY-MM-DD and DD-MM-YYYY.
+function parseDate(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  m = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})/);
+  if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function fmtInt(n) {
+  return Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+}
+function fmt1dp(n) {
+  return Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+}
+
+// ---------------------------------------------------------------------------
+// Ignore / snooze store (browser-local, localStorage)
+// ---------------------------------------------------------------------------
+const IGNORE_LS_KEY = 'kwexpl_ignore';
+
+function loadIgnoreMap() {
+  let map = {};
+  try { map = JSON.parse(localStorage.getItem(IGNORE_LS_KEY) || '{}'); } catch (e) { map = {}; }
+  const now = Date.now();
+  let changed = false;
+  Object.keys(map).forEach(k => {
+    if (map[k] !== 'forever' && Number(map[k]) < now) { delete map[k]; changed = true; }
+  });
+  if (changed) saveIgnoreMap(map);
+  return map;
+}
+function saveIgnoreMap(map) {
+  try { localStorage.setItem(IGNORE_LS_KEY, JSON.stringify(map)); } catch (e) {}
+}
+function ignoreKey(brand, keyword, ns) {
+  const base = `${String(brand).toLowerCase()}||${String(keyword).toLowerCase()}`;
+  return ns ? `${ns}||${base}` : base;
+}
+
+// ---------------------------------------------------------------------------
+// Keyword Explorer (Blinkit reco) — parse + aggregate
+// ---------------------------------------------------------------------------
+function parseRecoKeywords(text) {
+  const rows = parseCSV(text);
+  if (!rows.length) return [];
+  const headerIdx = findHeaderRow(rows, ['keyword', 'brand']);
+  const header = rows[headerIdx].map(normHeader);
+  const col = (test) => { for (let c = 0; c < header.length; c++) if (test(header[c])) return c; return -1; };
+  const ci = {
+    brand: col(h => h === 'brand'),
+    category: col(h => h === 'category'),
+    date: col(h => h.indexOf('downloaded') >= 0 && h.indexOf('date') >= 0),
+    keyword: col(h => h === 'keyword'),
+    searches: col(h => h.indexOf('search') >= 0 && h.indexOf('30') >= 0),
+    ktype: col(h => h.indexOf('keyword type') >= 0),
+    asset: col(h => h.indexOf('asset type') >= 0),
+    trending: col(h => h.indexOf('trending') >= 0),
+  };
+  // fallback to fixed indices per documented column order if header names didn't resolve
+  const FIXED = { brand: 0, category: 1, date: 2, keyword: 3, searches: 4, ktype: 5, asset: 6, trending: 7 };
+  Object.keys(FIXED).forEach(k => { if (ci[k] < 0) ci[k] = FIXED[k]; });
+
+  const out = [];
+  for (let r = headerIdx + 1; r < rows.length; r++) {
+    const row = rows[r];
+    const keyword = String(row[ci.keyword] || '').trim();
+    const brand = String(row[ci.brand] || '').trim();
+    if (!keyword || !brand) continue;
+    const trendingRaw = String(row[ci.trending] || '').trim();
+    out.push({
+      brand,
+      category: String(row[ci.category] || '').trim(),
+      date: parseDate(row[ci.date]),
+      keyword,
+      searches: toNumber(row[ci.searches]),
+      ktype: String(row[ci.ktype] || '').trim() || 'Generic',
+      assetType: String(row[ci.asset] || '').trim(),
+      trending: trendingRaw !== '' && !/^(false|no|n|0)$/i.test(trendingRaw),
+    });
+  }
+  return out;
+}
+
+function aggregateReco(recs, catRevFn) {
+  if (!recs.length) return [];
+  let maxDate = null;
+  recs.forEach(r => { if (r.date && (!maxDate || r.date > maxDate)) maxDate = r.date; });
+  const cutoff = maxDate ? new Date(maxDate.getTime() - (LOOKBACK_DAYS_RECO - 1) * 86400000) : null;
+  const windowed = recs.filter(r => !cutoff || !r.date || r.date >= cutoff);
+
+  const groups = {}; // key = brand||keyword
+  windowed.forEach(r => {
+    const key = `${r.brand}||${r.keyword}`;
+    if (!groups[key]) {
+      groups[key] = {
+        brand: r.brand, keyword: r.keyword, ktype: r.ktype, trending: false,
+        searches: 0, categories: {}, // category -> {searches (max), rev}
+      };
+    }
+    const g = groups[key];
+    g.trending = g.trending || r.trending;
+    g.searches = Math.max(g.searches, r.searches);
+    if (r.category) {
+      const cat = g.categories[r.category] || { category: r.category, searches: 0 };
+      cat.searches = Math.max(cat.searches, r.searches);
+      g.categories[r.category] = cat;
+    }
+  });
+
+  const out = Object.values(groups).map(g => {
+    const catList = Object.values(g.categories).map(c => ({
+      category: c.category,
+      searches: c.searches,
+      revenue: catRevFn ? catRevFn(g.brand, c.category) : null,
+    }));
+    // Rank by revenue when we have it, else fall back to search volume.
+    catList.sort((a, b) => {
+      if (a.revenue != null && b.revenue != null && a.revenue !== b.revenue) return b.revenue - a.revenue;
+      return b.searches - a.searches;
+    });
+    const primaryCategory = catList.length ? catList[0].category : '';
+    const moreCount = Math.max(0, catList.length - 1);
+    return {
+      brand: g.brand,
+      keyword: g.keyword,
+      ktype: g.ktype,
+      trending: g.trending,
+      searches: g.searches,
+      categories: catList,
+      primaryCategory,
+      moreCount,
+    };
+  });
+
+  out.sort((a, b) => b.searches - a.searches);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Live "running on BK" set (optional feed — see CONFIG.LIVE_ADS_*)
+// ---------------------------------------------------------------------------
+function parseLiveAdsRows(text) {
+  const rows = parseCSV(text);
+  if (!rows.length) return [];
+  const headerIdx = findHeaderRow(rows, ['keyword']);
+  const header = rows[headerIdx].map(normHeader);
+  const col = (test) => { for (let c = 0; c < header.length; c++) if (test(header[c])) return c; return -1; };
+  const ci = {
+    brand: col(h => h === 'brand'),
+    keyword: col(h => h === 'keyword'),
+    type: col(h => h === 'type' || h.indexOf('ad type') >= 0),
+    spend: col(h => h.indexOf('spend') >= 0),
+    impressions: col(h => h.indexOf('impression') >= 0),
+    date: col(h => h.indexOf('date') >= 0),
+  };
+  const out = [];
+  for (let r = headerIdx + 1; r < rows.length; r++) {
+    const row = rows[r];
+    const keyword = String(row[ci.keyword] || '').trim();
+    const brand = String(row[ci.brand] || '').trim();
+    if (!keyword || !brand) continue;
+    out.push({
+      brand, keyword,
+      type: String(row[ci.type] || '').trim(),
+      spend: toNumber(row[ci.spend]),
+      impressions: toNumber(row[ci.impressions]),
+      date: parseDate(row[ci.date]),
+    });
+  }
+  return out;
+}
+
+function buildLiveKwSet(rows) {
+  const set = new Set();
+  if (!rows.length) return set;
+  let maxDate = null;
+  rows.forEach(r => { if (r.date && (!maxDate || r.date > maxDate)) maxDate = r.date; });
+  const cutoff = maxDate ? new Date(maxDate.getTime() - (LOOKBACK_DAYS_LIVE - 1) * 86400000) : null;
+  rows.forEach(r => {
+    if (r.type !== 'Search') return;
+    if (cutoff && r.date && r.date < cutoff) return;
+    if (!(r.spend > 0 || r.impressions > 0)) return;
+    set.add(`${r.brand.toLowerCase()}||${r.keyword.toLowerCase()}`);
+  });
+  return set;
+}
+
+// ---------------------------------------------------------------------------
+// Category revenue proxy (optional feed — see CONFIG.SALES_WORKBOOK_ID)
+// ---------------------------------------------------------------------------
+function parseSalesRows(text) {
+  const rows = parseCSV(text);
+  if (!rows.length) return [];
+  const headerIdx = findHeaderRow(rows, ['brand', 'category']);
+  const header = rows[headerIdx].map(normHeader);
+  const col = (test) => { for (let c = 0; c < header.length; c++) if (test(header[c])) return c; return -1; };
+  const ci = {
+    brand: col(h => h === 'brand'),
+    category: col(h => h === 'category'),
+    units: col(h => h.indexOf('unit') >= 0),
+  };
+  const out = [];
+  for (let r = headerIdx + 1; r < rows.length; r++) {
+    const row = rows[r];
+    const brand = String(row[ci.brand] || '').trim();
+    const category = String(row[ci.category] || '').trim();
+    if (!brand || !category) continue;
+    out.push({ brand, category, units: toNumber(row[ci.units]) });
+  }
+  return out;
+}
+
+function buildCatRevMap(rows) {
+  const map = {};
+  rows.forEach(r => {
+    const key = `${r.brand}||${r.category}`;
+    map[key] = (map[key] || 0) + r.units;
+  });
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// AZ->BK Gaps (Amazon snapshot) — parse + aggregate
+// ---------------------------------------------------------------------------
+function parseAmazonSnapshot(text) {
+  const rows = parseCSV(text);
+  if (!rows.length) return [];
+  const headerIdx = findHeaderRow(rows, ['search query']);
+  const header = rows[headerIdx].map(normHeader);
+  const col = (test) => { for (let c = 0; c < header.length; c++) if (test(header[c])) return c; return -1; };
+  const ci = {
+    brand: col(h => h === 'brand'),
+    type: col(h => h === 'type'),
+    keyword: col(h => h.indexOf('search query') >= 0),
+    volWk: col(h => h.indexOf('search volume') >= 0),
+    unitsWk: col(h => h.indexOf('units sold') >= 0),
+    weeks: col(h => h === 'weeks'),
+  };
+  const out = [];
+  for (let r = headerIdx + 1; r < rows.length; r++) {
+    const row = rows[r];
+    const keyword = String(row[ci.keyword] || '').trim();
+    const brand = String(row[ci.brand] || '').trim();
+    if (!keyword || !brand) continue;
+    const volWk = toNumber(row[ci.volWk]);
+    const unitsWk = toNumber(row[ci.unitsWk]);
+    const ktypeRaw = String(row[ci.type] || '').trim().toLowerCase();
+    const ktype = ktypeRaw ? ktypeRaw.charAt(0).toUpperCase() + ktypeRaw.slice(1) : 'Generic';
+    out.push({
+      brand,
+      ktype,
+      keyword,
+      volWk, unitsWk,
+      volDay: volWk / 7,
+      unitsDay: unitsWk / 7,
+      conv: volWk > 0 ? (unitsWk / volWk) : 0,
+      weeks: toNumber(row[ci.weeks]) || LOOKBACK_WEEKS_AZ,
+    });
+  }
+  return out;
+}
+
+function aggregateAmazon(list) {
+  const groups = {};
+  list.forEach(r => {
+    const key = `${r.brand}||${r.keyword}`;
+    if (!groups[key] || r.unitsDay > groups[key].unitsDay) groups[key] = r;
+  });
+  const out = Object.values(groups);
+  out.sort((a, b) => b.unitsDay - a.unitsDay);
+  return out;
+}
+
+function computeBenchmarks(rows) {
+  const agg = {}; // brand||type -> {vol, units}
+  rows.forEach(r => {
+    const key = `${r.brand}||${r.ktype}`;
+    if (!agg[key]) agg[key] = { vol: 0, units: 0 };
+    agg[key].vol += r.volDay;
+    agg[key].units += r.unitsDay;
+  });
+  const bench = {};
+  Object.keys(agg).forEach(k => { bench[k] = agg[k].vol > 0 ? agg[k].units / agg[k].vol : 0; });
+  return bench; // conversion ratio (0-1) per brand||type
+}
+
+// ---------------------------------------------------------------------------
+// Small hooks
+// ---------------------------------------------------------------------------
+function useIgnoreMap() {
+  const [map, setMap] = React.useState(() => loadIgnoreMap());
+  const setIgnore = (key, mode) => {
+    const next = { ...map };
+    if (mode === 'undo') delete next[key];
+    else if (mode === 'forever') next[key] = 'forever';
+    else next[key] = Date.now() + 14 * 86400000; // 2 weeks
+    setMap(next);
+    saveIgnoreMap(next);
+  };
+  return [map, setIgnore];
+}
+
+function useDebounced(value, ms) {
+  const [v, setV] = React.useState(value);
+  React.useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
+// ---------------------------------------------------------------------------
+// Small shared components
+// ---------------------------------------------------------------------------
+function Kpi({ label, value }) {
+  return (
+    <div className="kpi-card">
+      <div className="label">{label}</div>
+      <div className="value">{value}</div>
+    </div>
+  );
+}
+
+function TypeBadge({ type }) {
+  const t = String(type || '').toLowerCase();
+  const cls = t === 'competition' ? 'type-competition' : t === 'branded' ? 'type-branded' : 'type-generic';
+  return <span className={`badge ${cls}`}>{type || 'Generic'}</span>;
+}
+
+function StatusBadge({ status }) {
+  const cls = status === 'Running' ? 'status-running' : status === 'Ignored' ? 'status-ignored' : 'status-not-running';
+  const label = status === 'Running' ? '🟢 Running' : status === 'Ignored' ? '⏸ Ignored' : '🔴 Not running';
+  return <span className={`badge ${cls}`}>{label}</span>;
+}
+
+function exportToExcel(rows, columns, filename) {
+  const data = rows.map(r => {
+    const o = {};
+    columns.forEach(c => { o[c.label] = c.get(r); });
+    return o;
+  });
+  const ws = XLSX.utils.json_to_sheet(data);
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range(range) };
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+  XLSX.writeFile(wb, filename);
+}
+
+// ===========================================================================
+// Tab 1: Keyword Explorer
+// ===========================================================================
+function KwExplorerTab({ recoRows, catRevFn, liveKwSet, liveConfigured, salesConfigured }) {
+  const [ignoreMap, setIgnore] = useIgnoreMap();
+  const [q, setQ] = React.useState('');
+  const qd = useDebounced(q, 200);
+  const [brand, setBrand] = React.useState('All');
+  const [category, setCategory] = React.useState('All');
+  const [ktype, setKtype] = React.useState('All');
+  const [status, setStatus] = React.useState('untapped'); // untapped | running | all
+  const [trendingOnly, setTrendingOnly] = React.useState(false);
+  const [showIgnored, setShowIgnored] = React.useState(false);
+
+  const aggregated = React.useMemo(() => aggregateReco(recoRows, catRevFn), [recoRows, catRevFn]);
+
+  const rows = React.useMemo(() => aggregated.map(r => {
+    const key = ignoreKey(r.brand, r.keyword);
+    const ignoreVal = ignoreMap[key];
+    const ignored = ignoreVal === 'forever' || (typeof ignoreVal === 'number' && ignoreVal > Date.now());
+    const running = liveKwSet.has(`${r.brand.toLowerCase()}||${r.keyword.toLowerCase()}`);
+    const statusLabel = ignored ? 'Ignored' : running ? 'Running' : 'Not running';
+    return { ...r, ignored, running, statusLabel, ignoreKeyVal: key };
+  }), [aggregated, ignoreMap, liveKwSet]);
+
+  const brands = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.brand))).sort()], [rows]);
+  const categories = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.primaryCategory).filter(Boolean))).sort()], [rows]);
+  const ktypes = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.ktype))).sort()], [rows]);
+
+  const filtered = rows.filter(r => {
+    if (!showIgnored && r.ignored) return false;
+    if (showIgnored && !r.ignored) return false;
+    if (status === 'untapped' && r.running) return false;
+    if (status === 'running' && !r.running) return false;
+    if (brand !== 'All' && r.brand !== brand) return false;
+    if (category !== 'All' && r.primaryCategory !== category) return false;
+    if (ktype !== 'All' && r.ktype !== ktype) return false;
+    if (trendingOnly && !r.trending) return false;
+    if (qd && r.keyword.toLowerCase().indexOf(qd.toLowerCase()) < 0) return false;
+    return true;
+  });
+
+  const kpis = React.useMemo(() => {
+    const base = rows.filter(r => !r.ignored || showIgnored);
+    const untapped = rows.filter(r => !r.running && !r.ignored);
+    return {
+      suggested: rows.length,
+      untapped: untapped.length,
+      untappedVol: untapped.reduce((s, r) => s + r.searches, 0),
+      running: rows.filter(r => r.running).length,
+    };
+  }, [rows]);
+
+  return (
+    <div>
+      {!liveConfigured && (
+        <div className="banner warn">
+          "Running on BK" isn't wired to a live ad-performance feed yet, so every keyword below shows
+          as <b>Not running</b>. Set <code>CONFIG.LIVE_ADS_WORKBOOK_ID</code> / <code>LIVE_ADS_TAB_GID</code> in
+          index.html to enable real status (see README).
+        </div>
+      )}
+      {!salesConfigured && (
+        <div className="banner warn">
+          Category ranking is using search volume as a proxy (no <code>CONFIG.SALES_WORKBOOK_ID</code> configured),
+          not true revenue. Plug in your Sales-import feed for revenue-ranked categories (see README).
+        </div>
+      )}
+
+      <div className="kpi-row">
+        <Kpi label="Suggested keywords" value={fmtInt(kpis.suggested)} />
+        <Kpi label="Untapped (no ads)" value={fmtInt(kpis.untapped)} />
+        <Kpi label="Untapped search vol" value={fmtInt(kpis.untappedVol)} />
+        <Kpi label="Already running" value={fmtInt(kpis.running)} />
+      </div>
+
+      <div className="filters">
+        <input type="text" placeholder="Search keyword…" value={q} onChange={e => setQ(e.target.value)} />
+        <select value={brand} onChange={e => setBrand(e.target.value)}>
+          {brands.map(b => <option key={b} value={b}>{b === 'All' ? 'All brands' : b}</option>)}
+        </select>
+        <select value={category} onChange={e => setCategory(e.target.value)}>
+          {categories.map(c => <option key={c} value={c}>{c === 'All' ? 'All categories' : c}</option>)}
+        </select>
+        <select value={ktype} onChange={e => setKtype(e.target.value)}>
+          {ktypes.map(t => <option key={t} value={t}>{t === 'All' ? 'All types' : t}</option>)}
+        </select>
+        <div className="status-toggle">
+          <button className={status === 'untapped' ? 'active' : ''} onClick={() => setStatus('untapped')}>Untapped</button>
+          <button className={status === 'running' ? 'active' : ''} onClick={() => setStatus('running')}>Running</button>
+          <button className={status === 'all' ? 'active' : ''} onClick={() => setStatus('all')}>All</button>
+        </div>
+        <label className="chk"><input type="checkbox" checked={trendingOnly} onChange={e => setTrendingOnly(e.target.checked)} /> 🔥 Trending only</label>
+        <div className="spacer" />
+        <label className="chk"><input type="checkbox" checked={showIgnored} onChange={e => setShowIgnored(e.target.checked)} /> Show ignored</label>
+      </div>
+
+      <div className="toolbar-row">
+        <button className="export-btn" onClick={() => exportToExcel(filtered, [
+          { label: 'Keyword', get: r => r.keyword },
+          { label: 'Search DRR (max 14d)', get: r => Math.round(r.searches) },
+          { label: 'Brand', get: r => r.brand },
+          { label: 'Primary Category', get: r => r.primaryCategory },
+          { label: 'Other Categories', get: r => r.categories.slice(1).map(c => c.category).join(', ') },
+          { label: 'Type', get: r => r.ktype },
+          { label: 'Trending', get: r => r.trending ? 'Yes' : 'No' },
+          { label: 'Status', get: r => r.statusLabel },
+        ], 'kw_explorer_export.xlsx')}>⬇ Excel</button>
+      </div>
+
+      <div className="table-wrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th className="kw-col">Keyword</th>
+              <th className="num">Search DRR</th>
+              <th>Brand</th>
+              <th>Category</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 && (
+              <tr><td colSpan="7"><div className="empty-state">No keywords match these filters.</div></td></tr>
+            )}
+            {filtered.map(r => (
+              <tr key={r.brand + '||' + r.keyword}>
+                <td className="kw-cell">{r.keyword}{r.trending && <span className="badge fire type-competition">🔥</span>}</td>
+                <td className="num">{fmtInt(r.searches)}</td>
+                <td>{r.brand}</td>
+                <td>
+                  <span className="cat-primary">{r.primaryCategory || '—'}</span>
+                  {r.moreCount > 0 && <span className="cat-more" title={r.categories.slice(1).map(c => c.category).join(', ')}>+{r.moreCount} more</span>}
+                </td>
+                <td><TypeBadge type={r.ktype} /></td>
+                <td><StatusBadge status={r.statusLabel} /></td>
+                <td>
+                  {r.ignored ? (
+                    <button className="action-btn undo" onClick={() => setIgnore(r.ignoreKeyVal, 'undo')}>↩ Un-ignore</button>
+                  ) : (!r.running && (
+                    <React.Fragment>
+                      <button className="action-btn" onClick={() => setIgnore(r.ignoreKeyVal, '2wk')}>⏸ 2wk</button>
+                      <button className="action-btn" onClick={() => setIgnore(r.ignoreKeyVal, 'forever')}>🚫 Forever</button>
+                    </React.Fragment>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="footnote">Search DRR = max 30-day search volume seen in the last 14 days, per keyword × brand. Categories ranked by {salesConfigured ? 'revenue' : 'search volume (revenue feed not configured)'}.</div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// Tab 2: AZ -> BK Gaps
+// ===========================================================================
+function AzGapsTab({ azRows, liveKwSet, liveConfigured }) {
+  const [ignoreMap, setIgnore] = useIgnoreMap();
+  const [q, setQ] = React.useState('');
+  const qd = useDebounced(q, 200);
+  const [brand, setBrand] = React.useState('All');
+  const [ktype, setKtype] = React.useState('All');
+  const [status, setStatus] = React.useState('untapped');
+  const [showIgnored, setShowIgnored] = React.useState(false);
+  const [qualifiedOnly, setQualifiedOnly] = React.useState(true);
+  const [volFloor, setVolFloor] = React.useState(100);
+  const [convPct, setConvPct] = React.useState(50);
+
+  const aggregated = React.useMemo(() => aggregateAmazon(azRows), [azRows]);
+  const benchmarks = React.useMemo(() => computeBenchmarks(azRows), [azRows]);
+
+  const rows = React.useMemo(() => aggregated.map(r => {
+    const key = ignoreKey(r.brand, r.keyword, 'az');
+    const ignoreVal = ignoreMap[key];
+    const ignored = ignoreVal === 'forever' || (typeof ignoreVal === 'number' && ignoreVal > Date.now());
+    const running = liveKwSet.has(`${r.brand.toLowerCase()}||${r.keyword.toLowerCase()}`);
+    const statusLabel = ignored ? 'Ignored' : running ? 'Running' : 'Not running';
+    const bench = benchmarks[`${r.brand}||${r.ktype}`] || 0;
+    const floor = bench * (convPct / 100);
+    const qualifies = r.volDay >= volFloor && r.conv >= floor;
+    return { ...r, ignored, running, statusLabel, ignoreKeyVal: key, bench, floor, qualifies };
+  }), [aggregated, ignoreMap, liveKwSet, benchmarks, volFloor, convPct]);
+
+  const brands = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.brand))).sort()], [rows]);
+  const ktypes = React.useMemo(() => ['All', ...Array.from(new Set(rows.map(r => r.ktype))).sort()], [rows]);
+
+  const filtered = rows.filter(r => {
+    if (!showIgnored && r.ignored) return false;
+    if (showIgnored && !r.ignored) return false;
+    if (status === 'untapped' && r.running) return false;
+    if (status === 'running' && !r.running) return false;
+    if (brand !== 'All' && r.brand !== brand) return false;
+    if (ktype !== 'All' && r.ktype !== ktype) return false;
+    if (qualifiedOnly && !r.qualifies) return false;
+    if (qd && r.keyword.toLowerCase().indexOf(qd.toLowerCase()) < 0) return false;
+    return true;
+  });
+
+  const kpis = React.useMemo(() => {
+    const untapped = rows.filter(r => !r.running && !r.ignored && (!qualifiedOnly || r.qualifies));
+    const base = rows.filter(r => !qualifiedOnly || r.qualifies);
+    return {
+      total: base.length,
+      untapped: untapped.length,
+      untappedUnits: untapped.reduce((s, r) => s + r.unitsDay, 0),
+      running: base.filter(r => r.running).length,
+    };
+  }, [rows, qualifiedOnly]);
+
+  const benchCaption = React.useMemo(() => {
+    return Object.keys(benchmarks).sort().map(k => {
+      const [b, t] = k.split('||');
+      return `${b}·${t} ${(benchmarks[k] * 100).toFixed(2)}%`;
+    }).join('  ·  ');
+  }, [benchmarks]);
+
+  return (
+    <div>
+      {!liveConfigured && (
+        <div className="banner warn">
+          "Running on BK" isn't wired to a live ad-performance feed yet, so every keyword below shows
+          as <b>Not running</b>. Set <code>CONFIG.LIVE_ADS_WORKBOOK_ID</code> / <code>LIVE_ADS_TAB_GID</code> in
+          index.html to enable real status (see README).
+        </div>
+      )}
+
+      <div className="kpi-row">
+        <Kpi label="AZ search terms" value={fmtInt(kpis.total)} />
+        <Kpi label="Untapped (no BK ads)" value={fmtInt(kpis.untapped)} />
+        <Kpi label="Untapped units/day" value={fmt1dp(kpis.untappedUnits)} />
+        <Kpi label="Already running" value={fmtInt(kpis.running)} />
+      </div>
+
+      <div className="filters">
+        <input type="text" placeholder="Search keyword…" value={q} onChange={e => setQ(e.target.value)} />
+        <select value={brand} onChange={e => setBrand(e.target.value)}>
+          {brands.map(b => <option key={b} value={b}>{b === 'All' ? 'All brands' : b}</option>)}
+        </select>
+        <select value={ktype} onChange={e => setKtype(e.target.value)}>
+          {ktypes.map(t => <option key={t} value={t}>{t === 'All' ? 'All types' : t}</option>)}
+        </select>
+        <div className="status-toggle">
+          <button className={status === 'untapped' ? 'active' : ''} onClick={() => setStatus('untapped')}>Untapped</button>
+          <button className={status === 'running' ? 'active' : ''} onClick={() => setStatus('running')}>Running</button>
+          <button className={status === 'all' ? 'active' : ''} onClick={() => setStatus('all')}>All</button>
+        </div>
+        <label className="chk"><input type="checkbox" checked={qualifiedOnly} onChange={e => setQualifiedOnly(e.target.checked)} /> ✅ Qualified only</label>
+        <div className="num-inline">Vol floor/day ≥ <input type="number" value={volFloor} onChange={e => setVolFloor(Number(e.target.value) || 0)} /></div>
+        <div className="num-inline">Conv ≥ <input type="number" value={convPct} onChange={e => setConvPct(Number(e.target.value) || 0)} />% of benchmark</div>
+        <div className="spacer" />
+        <label className="chk"><input type="checkbox" checked={showIgnored} onChange={e => setShowIgnored(e.target.checked)} /> Show ignored</label>
+        {benchCaption && <div className="caption">Blended Amazon conversion by brand·type: {benchCaption}</div>}
+      </div>
+
+      <div className="toolbar-row">
+        <button className="export-btn" onClick={() => exportToExcel(filtered, [
+          { label: 'Keyword', get: r => r.keyword },
+          { label: 'Units Sold/day', get: r => Number(r.unitsDay.toFixed(1)) },
+          { label: 'Search Vol/day', get: r => Math.round(r.volDay) },
+          { label: 'Conversion %', get: r => Number((r.conv * 100).toFixed(2)) },
+          { label: 'Brand', get: r => r.brand },
+          { label: 'Type', get: r => r.ktype },
+          { label: 'Status', get: r => r.statusLabel },
+        ], 'az_bk_gaps_export.xlsx')}>⬇ Excel</button>
+      </div>
+
+      <div className="table-wrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th className="kw-col">Keyword</th>
+              <th className="num">Units Sold/day</th>
+              <th className="num">Search Vol/day</th>
+              <th className="num">Conversion %</th>
+              <th>Brand</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 && (
+              <tr><td colSpan="8"><div className="empty-state">No keywords match these filters.</div></td></tr>
+            )}
+            {filtered.map(r => (
+              <tr key={r.brand + '||' + r.keyword}>
+                <td className="kw-cell">{r.keyword}</td>
+                <td className="num">{fmt1dp(r.unitsDay)}</td>
+                <td className="num">{fmtInt(r.volDay)}</td>
+                <td className="num">{(r.conv * 100).toFixed(2)}%</td>
+                <td>{r.brand}</td>
+                <td><TypeBadge type={r.ktype} /></td>
+                <td><StatusBadge status={r.statusLabel} /></td>
+                <td>
+                  {r.ignored ? (
+                    <button className="action-btn undo" onClick={() => setIgnore(r.ignoreKeyVal, 'undo')}>↩ Un-ignore</button>
+                  ) : (!r.running && (
+                    <React.Fragment>
+                      <button className="action-btn" onClick={() => setIgnore(r.ignoreKeyVal, '2wk')}>⏸ 2wk</button>
+                      <button className="action-btn" onClick={() => setIgnore(r.ignoreKeyVal, 'forever')}>🚫 Forever</button>
+                    </React.Fragment>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="footnote">Units Sold/day and Search Vol/day are 4-week weekly averages divided by 7 (from the Apps Script snapshot). Ranked by units/day — "doing well on Amazon" means units sold, not just search clicks.</div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// App shell
+// ===========================================================================
+function App() {
+  const [tab, setTab] = React.useState('kw');
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+  const [recoText, setRecoText] = React.useState('');
+  const [azText, setAzText] = React.useState('');
+  const [liveText, setLiveText] = React.useState('');
+  const [salesText, setSalesText] = React.useState('');
+  const [lastLoaded, setLastLoaded] = React.useState(null);
+  const [refreshTick, setRefreshTick] = React.useState(0);
+
+  const liveConfigured = !!CONFIG.LIVE_ADS_WORKBOOK_ID;
+  const salesConfigured = !!CONFIG.SALES_WORKBOOK_ID;
+
+  React.useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const jobs = [
+          fetchSheetCSV(CONFIG.RECO_WORKBOOK_ID, CONFIG.RECO_TAB_GID, 'reco_bk'),
+          fetchSheetCSV(CONFIG.RECO_WORKBOOK_ID, CONFIG.AZ_SNAPSHOT_GID, 'az_snap'),
+        ];
+        if (liveConfigured) jobs.push(fetchSheetCSV(CONFIG.LIVE_ADS_WORKBOOK_ID, CONFIG.LIVE_ADS_TAB_GID, 'live_ads'));
+        if (salesConfigured) jobs.push(fetchSheetCSV(CONFIG.SALES_WORKBOOK_ID, CONFIG.SALES_TAB_GID, 'sales_import'));
+        const results = await Promise.all(jobs);
+        if (cancelled) return;
+        setRecoText(results[0].text || '');
+        setAzText(results[1].text || '');
+        if (liveConfigured) setLiveText(results[2].text || '');
+        if (salesConfigured) setSalesText(results[liveConfigured ? 3 : 2].text || '');
+        setLastLoaded(new Date());
+      } catch (err) {
+        if (!cancelled) setError(err.message || String(err));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [refreshTick]);
+
+  const recoRows = React.useMemo(() => recoText ? parseRecoKeywords(recoText) : [], [recoText]);
+  const azRows = React.useMemo(() => azText ? parseAmazonSnapshot(azText) : [], [azText]);
+  const liveRows = React.useMemo(() => liveText ? parseLiveAdsRows(liveText) : [], [liveText]);
+  const salesRows = React.useMemo(() => salesText ? parseSalesRows(salesText) : [], [salesText]);
+  const liveKwSet = React.useMemo(() => buildLiveKwSet(liveRows), [liveRows]);
+  const catRevMap = React.useMemo(() => buildCatRevMap(salesRows), [salesRows]);
+  const catRevFn = React.useCallback((brand, category) => {
+    if (!salesConfigured) return null;
+    const v = catRevMap[`${brand}||${category}`];
+    return v === undefined ? 0 : v;
+  }, [catRevMap, salesConfigured]);
+
+  return (
+    <div className="app">
+      <div className="app-header">
+        <div>
+          <h1>🔎 Marketplace Keyword Explorer</h1>
+          <div className="sub">
+            {lastLoaded ? `Data as of ${lastLoaded.toLocaleString('en-IN')} (cached 4h)` : 'Loading…'}
+          </div>
+        </div>
+        <button className="refresh-btn" disabled={loading} onClick={() => setRefreshTick(t => t + 1)}>
+          {loading ? 'Refreshing…' : '↻ Refresh data'}
+        </button>
+      </div>
+
+      <div className="tabs">
+        <button className={`tab-btn ${tab === 'kw' ? 'active' : ''}`} onClick={() => setTab('kw')}>🔎 Kw Explorer</button>
+        <button className={`tab-btn ${tab === 'az' ? 'active' : ''}`} onClick={() => setTab('az')}>🅰 AZ→BK Gaps</button>
+      </div>
+
+      {error && <div className="banner error">Couldn't load sheet data: {error}. Check that the workbook is link-shared and the gid is correct.</div>}
+      {loading && !lastLoaded && <div className="loading-state">Loading keyword data…</div>}
+
+      {!loading || lastLoaded ? (
+        tab === 'kw'
+          ? <KwExplorerTab recoRows={recoRows} catRevFn={catRevFn} liveKwSet={liveKwSet} liveConfigured={liveConfigured} salesConfigured={salesConfigured} />
+          : <AzGapsTab azRows={azRows} liveKwSet={liveKwSet} liveConfigured={liveConfigured} />
+      ) : null}
+    </div>
+  );
+}
+
+function startApp() {
+  const root = ReactDOM.createRoot(document.getElementById('root'));
+  root.render(<App />);
+}
+
+window.startApp = startApp;
+startApp();
+</script>
+
+<script>
+  // The source script above is deliberately NOT type="text/babel" -- Babel
+  // standalone auto-scans and executes any text/babel script on its own as
+  // soon as it loads, which would run this code a second time (in addition
+  // to the manual transform below) and throw "Identifier already declared".
+  // Using a type Babel doesn't recognize keeps this the only execution path.
+  //
+  // We also transform with the CLASSIC runtime explicitly. Babel's
+  // "automatic" runtime (the default since preset-react 7.9+) tries to
+  // import from "react/jsx-runtime", which does not resolve in a plain
+  // UMD/CDN setup with no module bundler -> blank page with a console
+  // error. Forcing runtime:"classic" makes it call React.createElement
+  // directly, which works with the UMD React build loaded above.
+  (function () {
+    var src = document.getElementById('app-source').textContent;
+    var out = Babel.transform(src, {
+      presets: [['react', { runtime: 'classic' }]],
+      filename: 'app.jsx',
+    }).code;
+    var s = document.createElement('script');
+    s.textContent = out;
+    document.body.appendChild(s);
+  })();
+</script>
+</body>
+</html>
