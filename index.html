@@ -514,9 +514,12 @@ function parseBkAdsRows(text) {
     category: col(h => h.indexOf('category') >= 0),
     compBrand: col(h => h.indexOf('comp brand') >= 0),
   };
-  // Fallback to the documented column-letter order if header names didn't resolve
-  // (E, N, O, Q, S, AA, AB, AC, AD — 0-indexed below).
-  const FIXED = { keyword: 4, newUsers: 13, directSales: 14, directQty: 16, estBudget: 18, ktype: 26, brand: 27, category: 28, compBrand: 29 };
+  // Fallback to the documented column-letter order if header names didn't resolve.
+  // The live sheet's header row is blank for most columns (only Keyword, Type,
+  // Brand and a few others have real text) — this fallback is NOT an edge case
+  // here, it's the normal path for date/newUsers/directSales/directQty/estBudget.
+  // (B, E, N, O, Q, S, AA, AB, AC, AD — 0-indexed below.)
+  const FIXED = { date: 1, keyword: 4, newUsers: 13, directSales: 14, directQty: 16, estBudget: 18, ktype: 26, brand: 27, category: 28, compBrand: 29 };
   Object.keys(FIXED).forEach(k => { if (ci[k] < 0) ci[k] = FIXED[k]; });
 
   const out = [];
@@ -551,11 +554,18 @@ function aggregateBkAds(list) {
   if (!list.length) return [];
   let maxDate = null;
   list.forEach(r => { if (r.date && (!maxDate || r.date > maxDate)) maxDate = r.date; });
-  const cutoff = maxDate ? new Date(maxDate.getTime() - (LOOKBACK_DAYS_BK - 1) * 86400000) : null;
-  const windowed = list.filter(r => !cutoff || !r.date || (r.date >= cutoff && r.date <= maxDate));
+  // If nothing parsed to a valid date, there's no safe window to sum over —
+  // show nothing rather than silently dumping the whole sheet's history into
+  // a "daily" figure (which is exactly how this tab's numbers got inflated
+  // before the date column's fallback index was fixed).
+  if (!maxDate) return [];
+  const cutoff = new Date(maxDate.getTime() - (LOOKBACK_DAYS_BK - 1) * 86400000);
+  // A row must have its own valid, in-window date to count — a missing/bad
+  // date is excluded, never silently treated as "in window".
+  const windowed = list.filter(r => r.date && r.date >= cutoff && r.date <= maxDate);
 
   const dayKeys = new Set();
-  windowed.forEach(r => { if (r.date) dayKeys.add(r.date.getTime()); });
+  windowed.forEach(r => dayKeys.add(r.date.getTime()));
   const daysPresent = dayKeys.size || 1;
 
   const groups = {};
