@@ -123,23 +123,64 @@ git push -u origin main
 
 Every push to `main` auto-redeploys.
 
-## 6. Sharing / access requirements
+## 6. Access control (Google Sign-In, restricted to one email domain)
+
+`AUTH_CONFIG` near the top of the `<script>` block gates the whole app
+behind Google Sign-In, restricted to `ALLOWED_DOMAIN` (defaults to
+`mosaicwellness.in`). It ships **off** — `GOOGLE_CLIENT_ID: ''` — so the
+app stays open until you turn it on. To turn it on:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
+   under a project you control: **Create Credentials → OAuth client ID →
+   Application type: Web application**.
+2. Under **Authorized JavaScript origins**, add every URL people will open
+   this app from — e.g. `https://marketplace-keyword-explorer.vercel.app`
+   and any custom domain. Google Sign-In fails silently (or with a console
+   error) from an origin that isn't listed here.
+3. Copy the Client ID it gives you (looks like
+   `123...-abc....apps.googleusercontent.com`) into
+   `AUTH_CONFIG.GOOGLE_CLIENT_ID` in `index.html`, commit, push. That's the
+   only code change needed.
+4. A successful sign-in is remembered for `AUTH_CONFIG.SESSION_HOURS`
+   (default 24h) in that browser's `localStorage`, so people aren't
+   re-prompted every visit — only once a day, or after "Sign out".
+
+**Important limitation — read before relying on this for anything sensitive.**
+This is a purely client-side check: it decodes the Google ID token in the
+browser and checks the `email_verified` and `hd` (hosted domain) claims,
+but it does **not** verify the token's cryptographic signature, because
+there's no backend to verify it against. In practice that means: anyone
+using the app normally is genuinely forced through a real
+`@mosaicwellness.in` Google sign-in — but someone who opens devtools and
+calls the page's internal callback directly with a fabricated payload
+could bypass it. That's an acceptable trade-off for keeping people who
+don't work here from stumbling into an internal ads dashboard; it is
+**not** a hard security boundary. If this data ever needs one, do either
+(or both) of:
+- Turn on Vercel's own **Password Protection** (Project Settings →
+  Deployment Protection) as an additional layer in front of the whole
+  site — that one *is* enforced server-side before Vercel serves any page.
+- Add a Vercel Serverless Function that verifies the ID token's signature
+  (e.g. against `https://oauth2.googleapis.com/tokeninfo?id_token=...` or
+  via `google-auth-library`) and only then sets a real session cookie —
+  more work, but closes the devtools-bypass gap above.
+
+## 7. Sharing / access requirements
 
 - All source workbooks (including the BK ads-tracker workbook, which is
   separate from the other two) must stay **"Anyone with the link"** (viewer
-  is enough) — the fetches are unauthenticated and cross-origin. This is a
-  UI convenience app, not a security boundary: anyone with the deployed URL
-  can see the same data anyone with the sheet link can see. If that's a
-  concern, put the Vercel deployment behind Vercel's password/SSO
-  protection (Project Settings → Deployment Protection) rather than trying
-  to lock down the sheets.
+  is enough) — the fetches are unauthenticated and cross-origin. This is
+  separate from the Google Sign-In gate above: even with that gate on,
+  anyone who gets past it still fetches sheet data directly and
+  unauthenticated, so the sheets themselves are the actual data-access
+  boundary, not just the login screen.
 - `docs.google.com/.../export?format=csv` sometimes returns empty on
   link-shared (not "published to web") workbooks. This app always uses the
   **gviz** endpoint (`/gviz/tq?tqx=out:csv&gid=`) instead, which resolves
   reliably by gid regardless of publish state — keep using gid, not sheet
   name, if you add more tabs.
 
-## 7. Data refresh / caching
+## 8. Data refresh / caching
 
 - Sheet CSVs are cached client-side in IndexedDB (`marketplace_kwexpl_cache`)
   for **4 hours** (`CONFIG.CACHE_TTL_MS`). Users can force a refresh with the
@@ -148,7 +189,7 @@ Every push to `main` auto-redeploys.
   columns — that invalidates every user's cache immediately instead of
   waiting out the TTL.
 
-## 8. Adding another marketplace tab later
+## 9. Adding another marketplace tab later
 
 The pattern to copy: a `CONFIG` block for the new sheet, a `parseX` +
 `aggregateX` function pair, a `<XTab>` component, and one more entry in the
@@ -161,7 +202,7 @@ the same Qualified-only/benchmark pattern (`computeXBenchmarks`,
 (`sortKey`/`sortDir`/`handleSort`) — reuse whichever fits the new tab
 rather than building new ones.
 
-## 9. File map
+## 10. File map
 
 ```
 index.html                          the whole app (config, data layer, all three tabs)

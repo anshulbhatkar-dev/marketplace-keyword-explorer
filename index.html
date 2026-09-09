@@ -115,6 +115,17 @@
   .empty-state{padding:40px;text-align:center;color:var(--muted);font-size:14px;}
   .loading-state{padding:40px;text-align:center;color:var(--muted);font-size:14px;}
   .footnote{font-size:11.5px;color:var(--muted);margin-top:8px;}
+
+  .auth-gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+  .auth-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+    padding:36px 32px;max-width:380px;width:100%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.06);}
+  .auth-card h1{font-size:18px;margin:0 0 10px;}
+  .auth-card p{font-size:13px;color:var(--muted);margin:0 0 20px;line-height:1.5;}
+  .auth-btn-slot{display:flex;justify-content:center;}
+  .auth-bar{background:var(--panel);border-bottom:1px solid var(--border);padding:8px 24px;
+    font-size:12.5px;color:var(--muted);text-align:right;}
+  .auth-signout{border:none;background:none;color:var(--brand);font-size:12.5px;font-weight:600;
+    cursor:pointer;padding:0;}
 </style>
 </head>
 <body>
@@ -156,6 +167,17 @@ const CONFIG = {
   // instead (a reasonable proxy, just not revenue-true).
   SALES_WORKBOOK_ID: '',
   SALES_TAB_GID: '',
+};
+
+// ---------------------------------------------------------------------------
+// AUTH — Google Sign-In gate, restricted to one email domain.
+// Leave GOOGLE_CLIENT_ID blank to leave the app open (no gate) -- see README
+// "Access control" section for how to get a Client ID and turn this on.
+// ---------------------------------------------------------------------------
+const AUTH_CONFIG = {
+  GOOGLE_CLIENT_ID: '715660417203-847ijqq93aqhfmi7noqlkfjt7obkfrkg.apps.googleusercontent.com',
+  ALLOWED_DOMAIN: 'mosaicwellness.in',
+  SESSION_HOURS: 24, // how long a successful sign-in stays valid before asking again
 };
 
 const LOOKBACK_DAYS_RECO = 14;
@@ -1311,9 +1333,129 @@ function App() {
   );
 }
 
+// ===========================================================================
+// Access control — Google Sign-In, restricted to AUTH_CONFIG.ALLOWED_DOMAIN
+// ===========================================================================
+const AUTH_LS_KEY = 'mkt_kwexpl_auth';
+
+// Decodes a Google ID token's payload. This does NOT verify the token's
+// signature -- that's the honest limitation of a purely client-side, no-
+// backend gate. It stops casual/accidental access by anyone without a real
+// mosaicwellness.in Google sign-in going through the actual button below;
+// it is not a hard security boundary against someone opening devtools and
+// forging a callback. For that, put the Vercel deployment behind Vercel's
+// own Password Protection (Project Settings -> Deployment Protection) as
+// well, or verify the token server-side in a Vercel serverless function.
+function decodeJwtPayload(token) {
+  try {
+    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const json = decodeURIComponent(atob(b64).split('').map(c =>
+      '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+    return JSON.parse(json);
+  } catch (e) { return null; }
+}
+
+function isAllowedPayload(payload) {
+  if (!payload || !payload.email_verified) return false;
+  const email = String(payload.email || '').toLowerCase();
+  const domain = AUTH_CONFIG.ALLOWED_DOMAIN.toLowerCase();
+  return payload.hd === domain || email.endsWith('@' + domain);
+}
+
+function loadAuthSession() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(AUTH_LS_KEY) || 'null');
+    if (raw && raw.email && raw.exp > Date.now()) return raw;
+  } catch (e) { /* ignore */ }
+  return null;
+}
+function saveAuthSession(email) {
+  const session = { email, exp: Date.now() + AUTH_CONFIG.SESSION_HOURS * 3600000 };
+  try { localStorage.setItem(AUTH_LS_KEY, JSON.stringify(session)); } catch (e) {}
+  return session;
+}
+function clearAuthSession() {
+  try { localStorage.removeItem(AUTH_LS_KEY); } catch (e) {}
+}
+
+function GoogleSignInGate({ children }) {
+  const gated = !!AUTH_CONFIG.GOOGLE_CLIENT_ID;
+  const [session, setSession] = React.useState(() => gated ? loadAuthSession() : null);
+  const [denied, setDenied] = React.useState(null); // email that was rejected, if any
+  const [gsiError, setGsiError] = React.useState(null);
+  const buttonRef = React.useRef(null);
+
+  const handleCredential = React.useCallback((resp) => {
+    const payload = decodeJwtPayload(resp.credential);
+    if (isAllowedPayload(payload)) {
+      setDenied(null);
+      setSession(saveAuthSession(payload.email));
+    } else {
+      setDenied(payload && payload.email);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (!gated || session) return;
+    let cancelled = false;
+    const init = () => {
+      if (cancelled || !window.google || !window.google.accounts) return;
+      try {
+        window.google.accounts.id.initialize({ client_id: AUTH_CONFIG.GOOGLE_CLIENT_ID, callback: handleCredential });
+        if (buttonRef.current) {
+          window.google.accounts.id.renderButton(buttonRef.current, { theme: 'outline', size: 'large', width: 280 });
+        }
+      } catch (e) { setGsiError(String(e.message || e)); }
+    };
+    if (window.google && window.google.accounts) {
+      init();
+    } else {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.onload = init;
+      script.onerror = () => setGsiError('Could not load Google Sign-In script.');
+      document.head.appendChild(script);
+    }
+    return () => { cancelled = true; };
+  }, [gated, session, handleCredential]);
+
+  const signOut = () => {
+    clearAuthSession();
+    setSession(null);
+    if (window.google && window.google.accounts) window.google.accounts.id.disableAutoSelect();
+  };
+
+  if (!gated) return children; // AUTH_CONFIG.GOOGLE_CLIENT_ID not set -- app stays open
+
+  if (session) {
+    return (
+      <React.Fragment>
+        <div className="auth-bar">Signed in as {session.email} · <button className="auth-signout" onClick={signOut}>Sign out</button></div>
+        {children}
+      </React.Fragment>
+    );
+  }
+
+  return (
+    <div className="auth-gate">
+      <div className="auth-card">
+        <h1>🔎 Marketplace Keyword Explorer</h1>
+        <p>Sign in with your <b>@{AUTH_CONFIG.ALLOWED_DOMAIN}</b> Google account to continue.</p>
+        <div ref={buttonRef} className="auth-btn-slot" />
+        {denied && <div className="banner error" style={{ marginTop: 14 }}>
+          {denied || 'That account'} isn't on @{AUTH_CONFIG.ALLOWED_DOMAIN} -- access is restricted to that domain.
+        </div>}
+        {gsiError && <div className="banner error" style={{ marginTop: 14 }}>{gsiError}</div>}
+      </div>
+    </div>
+  );
+}
+
 function startApp() {
   const root = ReactDOM.createRoot(document.getElementById('root'));
-  root.render(<App />);
+  root.render(<GoogleSignInGate><App /></GoogleSignInGate>);
 }
 
 window.startApp = startApp;
